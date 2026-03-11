@@ -680,6 +680,12 @@ var init_doctypes = __esm({
         definition: "Documento que detalla la remuneraci\xF3n mensual de un trabajador.",
         fields: [
           {
+            key: "empleador",
+            type: "string",
+            visible: false,
+            ai: "Nombre legal de la empresa que emite el documento. Aparece en el membrete o encabezado, generalmente en la parte superior. No confundir con el nombre del trabajador (campo NOMBRE). Suele incluir S.A., Ltda., SpA u otra forma jur\xEDdica."
+          },
+          {
             key: "nombre",
             type: "string",
             visible: false
