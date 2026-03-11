@@ -8,7 +8,7 @@ export interface HowToObtain {
 export interface FieldDef {
   key: string
   type: 'string' | 'date' | 'month' | 'time' | 'num' | 'bool' | 'list' | 'obj'
-  visible: boolean
+  internal?: boolean
   ai?: string
 }
 
@@ -33,7 +33,7 @@ export interface Doctype {
   instructions: string
   fields: DoctypeField
   fieldDefs: FieldDef[]
-  visibleFields: Set<string>
+  internalFields: Set<string>
   howToObtain?: HowToObtain
 }
 
@@ -92,5 +92,6 @@ export interface MergedCedula {
   fecha_nacimiento: string
   nacionalidad: string
   profesion: string
+  lugar_nacimiento: string
   foto_base64: string | null
 }

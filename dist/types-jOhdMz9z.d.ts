@@ -5,7 +5,7 @@ interface HowToObtain {
 interface FieldDef {
     key: string;
     type: 'string' | 'date' | 'month' | 'time' | 'num' | 'bool' | 'list' | 'obj';
-    visible: boolean;
+    internal?: boolean;
     ai?: string;
 }
 type DocFrequency = 'once' | 'monthly' | 'annual';
@@ -27,7 +27,7 @@ interface Doctype {
     instructions: string;
     fields: DoctypeField;
     fieldDefs: FieldDef[];
-    visibleFields: Set<string>;
+    internalFields: Set<string>;
     howToObtain?: HowToObtain;
 }
 type DoctypesMap = Record<string, Doctype>;
@@ -74,6 +74,7 @@ interface MergedCedula {
     fecha_nacimiento: string;
     nacionalidad: string;
     profesion: string;
+    lugar_nacimiento: string;
     foto_base64: string | null;
 }
 

@@ -408,7 +408,7 @@ export async function detectCedulaSide(
       "reason": "breve explicación",
       "data": {
         // Si es front: rut, nombres, apellidos, fecha_nacimiento, foto_bbox, etc.
-        // Si es back: profesion, direccion (si visible)
+        // Si es back: profesion, lugar_nacimiento ("Nació en"), direccion (si visible)
       }
     }
 

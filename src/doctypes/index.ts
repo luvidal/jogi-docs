@@ -11,7 +11,7 @@ export {
   getDoctypesLegacyFormat,
   getDoctypesByCategory,
   getCategories,
-  getVisibleFieldKeys,
+  getInternalFieldKeys,
   getDocumentDefaults,
   isRecurring,
   applyDefaults,

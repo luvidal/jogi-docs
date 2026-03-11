@@ -39,11 +39,12 @@ const TYPE_DEFAULTS: Record<string, any> = {
 }
 
 /**
- * Expand field definitions to object format + collect visible field keys
+ * Expand field definitions to object format + collect internal field keys.
+ * Internal fields are extracted for validation/anti-fraud but not shown in report builder.
  */
-function expandFields(fieldDefs: FieldDef[]): { fields: DoctypeField; visibleFields: Set<string> } {
+function expandFields(fieldDefs: FieldDef[]): { fields: DoctypeField; internalFields: Set<string> } {
   const result: DoctypeField = {}
-  const visibleFields = new Set<string>()
+  const internalFields = new Set<string>()
 
   for (const field of fieldDefs) {
     const defaultValue = TYPE_DEFAULTS[field.type] ?? ''
@@ -62,12 +63,12 @@ function expandFields(fieldDefs: FieldDef[]): { fields: DoctypeField; visibleFie
 
     current[parts[parts.length - 1]] = defaultValue
 
-    if (field.visible) {
-      visibleFields.add(field.key)
+    if (field.internal) {
+      internalFields.add(field.key)
     }
   }
 
-  return { fields: result, visibleFields }
+  return { fields: result, internalFields }
 }
 
 /**
@@ -106,7 +107,7 @@ function getExpandedDoctypes(): DoctypesMap {
   const expanded: DoctypesMap = {}
 
   for (const [id, dt] of Object.entries(raw)) {
-    const { fields, visibleFields } = expandFields(dt.fields)
+    const { fields, internalFields } = expandFields(dt.fields)
     expanded[id] = {
       label: dt.label,
       shortLabel: dt.shortLabel,
@@ -122,7 +123,7 @@ function getExpandedDoctypes(): DoctypesMap {
       instructions: generateInstructions(dt.fields),
       fields,
       fieldDefs: dt.fields,
-      visibleFields,
+      internalFields,
       howToObtain: dt.howToObtain,
     }
   }
@@ -197,10 +198,10 @@ export function getCategories(): string[] {
   return Array.from(categories) as string[]
 }
 
-export function getVisibleFieldKeys(doctypeId: string): string[] {
+export function getInternalFieldKeys(doctypeId: string): string[] {
   const dt = getDoctypesMap()[doctypeId]
   if (!dt) return []
-  return [...dt.visibleFields]
+  return [...dt.internalFields]
 }
 
 export function getDocumentDefaults(doctypeid: string): DocRequirement {

@@ -205,7 +205,9 @@ export async function detectAndSplitCompositeCedula(
     return null
   }
 
-  const backOcr = await Doc2Fields(backBuf, mimetype, model)
+  // Force doctype since we already confirmed it's a cedula from the front side.
+  // Without this, the back half (QR, fingerprint, MRZ) often fails classification.
+  const backOcr = await Doc2Fields(backBuf, mimetype, model, 'cedula-identidad')
   const backDoc = backOcr?.documents?.[0]
 
   const rawBackData = backDoc?.data as Record<string, any> || {}

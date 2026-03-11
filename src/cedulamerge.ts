@@ -5,7 +5,7 @@ import type { CedulaFile, MergedCedula } from './types'
 export type { CedulaFile, MergedCedula }
 
 const CEDULA_FRONT_FIELDS = ['rut', 'nombres', 'apellidos', 'fecha_nacimiento', 'nacionalidad', 'foto_base64']
-const CEDULA_BACK_FIELDS = ['profesion']
+const CEDULA_BACK_FIELDS = ['profesion', 'lugar_nacimiento']
 const CEDULA_FIELDS = [...CEDULA_FRONT_FIELDS, ...CEDULA_BACK_FIELDS]
 
 const isFormattedRut = (v: any) => typeof v === 'string' && /\d{1,2}\.\d{3}\.\d{3}-[\dkK]/.test(v)
@@ -13,7 +13,7 @@ const isFormattedRut = (v: any) => typeof v === 'string' && /\d{1,2}\.\d{3}\.\d{
 /**
  * Merge front + back cedula files into a single personal data object.
  * Front: rut, nombres, apellidos, fecha_nacimiento, nacionalidad, foto_base64
- * Back: profesion
+ * Back: profesion, lugar_nacimiento
  */
 export function mergeCedulaFiles(files: CedulaFile[], logAction = 'parse_cedula'): MergedCedula {
   const merged: Record<string, any> = {}
@@ -47,6 +47,7 @@ export function mergeCedulaFiles(files: CedulaFile[], logAction = 'parse_cedula'
     fecha_nacimiento: merged.fecha_nacimiento || '',
     nacionalidad: merged.nacionalidad || '',
     profesion: merged.profesion || '',
+    lugar_nacimiento: merged.lugar_nacimiento || '',
     foto_base64: merged.foto_base64 || null,
   }
 }

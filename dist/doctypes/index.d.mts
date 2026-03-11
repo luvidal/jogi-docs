@@ -1,5 +1,5 @@
-import { D as DocFrequency, d as Doctype, e as DoctypeField, f as DoctypesMap, g as DocRequirement } from '../types-CvSSyAo_.mjs';
-export { F as FieldDef, H as HowToObtain } from '../types-CvSSyAo_.mjs';
+import { D as DocFrequency, d as Doctype, e as DoctypeField, f as DoctypesMap, g as DocRequirement } from '../types-jOhdMz9z.mjs';
+export { F as FieldDef, H as HowToObtain } from '../types-jOhdMz9z.mjs';
 
 /**
  * Document types helper library
@@ -29,7 +29,7 @@ declare function getDoctypesByCategory(category: string): Array<Doctype & {
     id: string;
 }>;
 declare function getCategories(): string[];
-declare function getVisibleFieldKeys(doctypeId: string): string[];
+declare function getInternalFieldKeys(doctypeId: string): string[];
 declare function getDocumentDefaults(doctypeid: string): DocRequirement;
 declare function isRecurring(doctypeid: string): boolean;
 declare function applyDefaults(requirements: Record<string, {
@@ -40,4 +40,4 @@ declare function applyDefaults(requirements: Record<string, {
     count: number;
 }>;
 
-export { DocFrequency, DocRequirement, Doctype, DoctypeField, DoctypesMap, applyDefaults, getCategories, getDoctype, getDoctypeIds, getDoctypes, getDoctypesByCategory, getDoctypesLegacyFormat, getDoctypesMap, getDocumentDefaults, getVisibleFieldKeys, isDoctypeValid, isMultiInstanceDocType, isRecurring };
+export { DocFrequency, DocRequirement, Doctype, DoctypeField, DoctypesMap, applyDefaults, getCategories, getDoctype, getDoctypeIds, getDoctypes, getDoctypesByCategory, getDoctypesLegacyFormat, getDoctypesMap, getDocumentDefaults, getInternalFieldKeys, isDoctypeValid, isMultiInstanceDocType, isRecurring };

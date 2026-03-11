@@ -1,5 +1,5 @@
-import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-CvSSyAo_.mjs';
-export { c as ExtractionDocument } from './types-CvSSyAo_.mjs';
+import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-jOhdMz9z.mjs';
+export { c as ExtractionDocument } from './types-jOhdMz9z.mjs';
 
 interface DocProcessorLogger {
     error(error: unknown, context?: Record<string, unknown>): void;
@@ -75,7 +75,7 @@ declare function detectAndSplitCompositeCedula(imageBuffer: Buffer, mimetype: st
 /**
  * Merge front + back cedula files into a single personal data object.
  * Front: rut, nombres, apellidos, fecha_nacimiento, nacionalidad, foto_base64
- * Back: profesion
+ * Back: profesion, lugar_nacimiento
  */
 declare function mergeCedulaFiles(files: CedulaFile[], logAction?: string): MergedCedula;
 

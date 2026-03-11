@@ -9,22 +9,22 @@ var doctypes_default = {
       {
         key: "beneficiario",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "estado_civil",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "monto_subsidio",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "formula_calculo",
         type: "string",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -44,58 +44,53 @@ var doctypes_default = {
     fields: [
       {
         key: "rut",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "nombres",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "apellidos",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "nacionalidad",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "sexo",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_nacimiento",
-        type: "date",
-        visible: true
+        type: "date"
       },
       {
         key: "numero_documento",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_emision",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_vencimiento",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "lugar_nacimiento",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "profesion",
         type: "string",
-        visible: false
+        internal: true
       }
     ],
     howToObtain: {
@@ -121,77 +116,73 @@ var doctypes_default = {
       {
         key: "folio",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "codigo_verificacion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "circunscripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "numero_inscripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "a\xF1o_registro",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_nacimiento",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "hora_nacimiento",
         type: "time",
-        visible: false
+        internal: true
       },
       {
         key: "sexo",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "padre.nombre",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "padre.rut",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "madre.nombre",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "madre.rut",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "fecha_emision",
         type: "date",
-        visible: false
+        internal: true
       }
     ],
     howToObtain: {
@@ -220,44 +211,39 @@ var doctypes_default = {
     fields: [
       {
         key: "empleador",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "rut_empleador",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "empleado",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "cargo",
         type: "string",
-        visible: true,
         ai: "Cargo o funci\xF3n del trabajador. En instituciones militares puede aparecer como rango/grado antes del nombre (ej: CAP.=Capit\xE1n, SGT.=Sargento, TTE.=Teniente). Extrae el cargo completo."
       },
       {
         key: "fecha_ingreso",
-        type: "date",
-        visible: true
+        type: "date"
       },
       {
         key: "antiguedad",
-        type: "string",
-        visible: true
+        type: "string"
       },
       {
         key: "renta",
         type: "num",
-        visible: true,
         ai: "Extrae la remuneraci\xF3n o renta mensual si est\xE1 indicada en el documento. Puede aparecer como sueldo, remuneraci\xF3n, renta bruta o l\xEDquida. Valor num\xE9rico entero en pesos sin separador de miles. Si no se menciona, omitir."
       }
     ]
@@ -275,77 +261,77 @@ var doctypes_default = {
       {
         key: "folio",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "codigo_verificacion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "circunscripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "numero_inscripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "a\xF1o_registro",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "marido.nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "marido.rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "marido.fecha_nacimiento",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "mujer.nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "mujer.rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "mujer.fecha_nacimiento",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_celebracion",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "hora_celebracion",
         type: "time",
-        visible: false
+        internal: true
       },
       {
         key: "regimen_patrimonial",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_emision",
         type: "date",
-        visible: false
+        internal: true
       }
     ],
     howToObtain: {
@@ -374,12 +360,12 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -396,43 +382,43 @@ var doctypes_default = {
       {
         key: "afp",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo_desde",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo_hasta",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "folio_certificacion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "codigo_validador",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "cotizaciones",
         type: "list",
-        visible: false,
-        ai: 'Extrae TODAS las filas de la tabla de cotizaciones como array. Cada entrada tiene: periodo (formato MM-YYYY), tipo ("normal" si es COTIZACION NORMAL pagada por empleador, "independiente" si es COT. NORMAL AFIL. INDEPENDIENTE pagada por el afiliado), monto (monto en pesos como n\xFAmero entero sin separadores), rut_pagador (RUT del pagador). Si un per\xEDodo tiene m\xFAltiples entradas (ej: normal + independiente), incluye ambas como filas separadas.'
+        ai: 'Extrae TODAS las filas de la tabla de cotizaciones como array. Cada entrada tiene: periodo (formato MM-YYYY), tipo ("normal" si es COTIZACION NORMAL pagada por empleador, "independiente" si es COT. NORMAL AFIL. INDEPENDIENTE pagada por el afiliado), monto (monto en pesos como n\xFAmero entero sin separadores), rut_pagador (RUT del pagador). Si un per\xEDodo tiene m\xFAltiples entradas (ej: normal + independiente), incluye ambas como filas separadas.',
+        internal: true
       }
     ],
     howToObtain: {
@@ -459,22 +445,22 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "afp",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "saldo",
         type: "num",
-        visible: false
+        internal: true
       }
     ],
     howToObtain: {
@@ -503,17 +489,17 @@ var doctypes_default = {
       {
         key: "arrendatario",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo",
         type: "month",
-        visible: false
+        internal: true
       },
       {
         key: "monto",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -530,70 +516,70 @@ var doctypes_default = {
       {
         key: "empleador",
         type: "string",
-        visible: false,
-        ai: "Nombre legal de la empresa que emite el documento. Aparece en el membrete o encabezado, generalmente en la parte superior. No confundir con el nombre del trabajador (campo NOMBRE). Suele incluir S.A., Ltda., SpA u otra forma jur\xEDdica."
+        ai: "Nombre legal de la empresa que emite el documento. Aparece en el membrete o encabezado, generalmente en la parte superior. No confundir con el nombre del trabajador (campo NOMBRE). Suele incluir S.A., Ltda., SpA u otra forma jur\xEDdica.",
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo",
         type: "month",
-        visible: false
+        internal: true
       },
       {
         key: "dias_trabajados",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_ingreso",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "cargo",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "institucion_previsional",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "institucion_salud",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "base_imponible",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "base_tributable",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "haberes",
         type: "list",
-        visible: false,
-        ai: "Extrae TODOS los \xEDtems de haberes/ingresos como array de {label, value}. Incluye haberes imponibles Y no imponibles (colaci\xF3n, movilizaci\xF3n). Usa el nombre exacto del documento (ej: 'Sueldo Base', 'Gratificaci\xF3n Legal', 'Bono Responsabilidad', 'Horas Extras', 'Colaci\xF3n', 'Movilizaci\xF3n'). value es el monto num\xE9rico entero (sin separador de miles). NO incluyas subtotales como 'Total Imponible', 'Total No Imponible', 'Total Haberes', 'Base Imponible'."
+        ai: "Extrae TODOS los \xEDtems de haberes/ingresos como array de {label, value}. Incluye haberes imponibles Y no imponibles (colaci\xF3n, movilizaci\xF3n). Usa el nombre exacto del documento (ej: 'Sueldo Base', 'Gratificaci\xF3n Legal', 'Bono Responsabilidad', 'Horas Extras', 'Colaci\xF3n', 'Movilizaci\xF3n'). value es el monto num\xE9rico entero (sin separador de miles). NO incluyas subtotales como 'Total Imponible', 'Total No Imponible', 'Total Haberes', 'Base Imponible'.",
+        internal: true
       },
       {
         key: "descuentos",
         type: "list",
-        visible: false,
-        ai: "Extrae TODOS los \xEDtems de descuentos como array de {label, value}. Incluye AFP, salud, cesant\xEDa, impuesto \xFAnico, anticipos, cuotas, pr\xE9stamos, etc. Usa el nombre exacto del documento. value es el monto num\xE9rico entero (sin separador de miles). NO incluyas subtotales como 'Total Leyes Soc.', 'Total Descuentos', 'Total Otros Descuentos'."
+        ai: "Extrae TODOS los \xEDtems de descuentos como array de {label, value}. Incluye AFP, salud, cesant\xEDa, impuesto \xFAnico, anticipos, cuotas, pr\xE9stamos, etc. Usa el nombre exacto del documento. value es el monto num\xE9rico entero (sin separador de miles). NO incluyas subtotales como 'Total Leyes Soc.', 'Total Descuentos', 'Total Otros Descuentos'.",
+        internal: true
       }
     ],
     howToObtain: {
@@ -621,22 +607,22 @@ var doctypes_default = {
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo",
         type: "month",
-        visible: false
+        internal: true
       },
       {
         key: "monto",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -653,53 +639,52 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "contribuyente",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "a\xF1o",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.boletas_vigentes",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.boletas_anuladas",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.honorario_bruto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.retencion_terceros",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.retencion_contribuyente",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "totales.total_liquido",
-        type: "num",
-        visible: true
+        type: "num"
       },
       {
         key: "meses",
         type: "obj",
-        visible: false,
-        ai: "Extrae el desglose mensual como objeto donde cada clave es el mes (enero, febrero, etc.) con boletas_vigentes, honorario_bruto, retencion y liquido"
+        ai: "Extrae el desglose mensual como objeto donde cada clave es el mes (enero, febrero, etc.) con boletas_vigentes, honorario_bruto, retencion y liquido",
+        internal: true
       }
     ]
   },
@@ -716,22 +701,22 @@ var doctypes_default = {
       {
         key: "empresa",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "year",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "ingresos",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "egresos",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -747,24 +732,24 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "actividades",
         type: "list",
-        visible: false,
-        ai: "Extrae todas las actividades econ\xF3micas del contribuyente como array de strings"
+        ai: "Extrae todas las actividades econ\xF3micas del contribuyente como array de strings",
+        internal: true
       },
       {
         key: "socios",
         type: "list",
-        visible: false,
-        ai: "Extrae los socios de la empresa incluyendo nombre, RUT y porcentaje de participaci\xF3n de cada uno"
+        ai: "Extrae los socios de la empresa incluyendo nombre, RUT y porcentaje de participaci\xF3n de cada uno",
+        internal: true
       }
     ],
     howToObtain: {
@@ -795,32 +780,32 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "periodo",
         type: "month",
-        visible: false
+        internal: true
       },
       {
         key: "cuota_actual",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "total_cuotas",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "saldo_insoluto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "caev",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -834,42 +819,42 @@ var doctypes_default = {
       {
         key: "entidad",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "tipo",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "monto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuota_mensual",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "saldo_insoluto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuotas_vencidas",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuotas_por_pagar",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "caev",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -887,53 +872,50 @@ var doctypes_default = {
       {
         key: "entidad",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "numero_credito",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "descripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "tipo",
         type: "string",
-        visible: false,
-        ai: "D=Directo, I=Indirecto"
+        ai: "D=Directo, I=Indirecto",
+        internal: true
       },
       {
         key: "monto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "saldo",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuota",
-        type: "num",
-        visible: true
+        type: "num"
       },
       {
         key: "vencimiento",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "cuotas_pagadas",
-        type: "num",
-        visible: true
+        type: "num"
       },
       {
         key: "cuotas_totales",
-        type: "num",
-        visible: true
+        type: "num"
       }
     ]
   },
@@ -949,42 +931,42 @@ var doctypes_default = {
       {
         key: "entidad",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "monto_credito",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuota_mensual",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "saldo_insoluto",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "tasa_interes",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuotas_vencidas",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "cuotas_por_pagar",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "caev",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -1001,28 +983,28 @@ var doctypes_default = {
       {
         key: "rut",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "nombre",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "deuda_total",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_informe",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "deudas",
         type: "list",
-        visible: false,
-        ai: "Extrae TODAS las deudas de la tabla 'Deuda Directa' como array, donde cada entrada tiene: entidad, tipo (Consumo/Vivienda/Comercial/etc.), total_credito, vigente, atraso_30_59, atraso_60_89, atraso_90_mas"
+        ai: "Extrae TODAS las deudas de la tabla 'Deuda Directa' como array, donde cada entrada tiene: entidad, tipo (Consumo/Vivienda/Comercial/etc.), total_credito, vigente, atraso_30_59, atraso_60_89, atraso_90_mas",
+        internal: true
       }
     ]
   },
@@ -1037,13 +1019,11 @@ var doctypes_default = {
       {
         key: "propietarios",
         type: "list",
-        visible: true,
         ai: "Extrae la lista de propietarios como array, donde cada entrada tiene: nombre, rut y porcentaje de participaci\xF3n"
       },
       {
         key: "avaluo_total",
-        type: "num",
-        visible: true
+        type: "num"
       }
     ]
   },
@@ -1059,22 +1039,22 @@ var doctypes_default = {
       {
         key: "comprador",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "vendedor",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "direccion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "monto",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -1089,12 +1069,12 @@ var doctypes_default = {
       {
         key: "direccion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "valor_comercial",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -1109,17 +1089,17 @@ var doctypes_default = {
       {
         key: "banco",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "tipo_cuenta",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "saldo",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -1133,17 +1113,17 @@ var doctypes_default = {
       {
         key: "titular",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "banco",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "saldo",
         type: "num",
-        visible: false
+        internal: true
       }
     ]
   },
@@ -1161,83 +1141,82 @@ var doctypes_default = {
       {
         key: "inscripcion",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "rut_propietario",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "propietario",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "domicilio",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "comuna",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_adquisicion",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_inscripcion",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "fecha_emision",
         type: "date",
-        visible: false
+        internal: true
       },
       {
         key: "marca",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "modelo",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "motor",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "chasis",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "color",
         type: "string",
-        visible: false
+        internal: true
       },
       {
         key: "tasacion_fiscal",
         type: "num",
-        visible: false
+        internal: true
       },
       {
         key: "a\xF1o",
-        type: "num",
-        visible: true
+        type: "num"
       },
       {
         key: "precio_mercado_clp",
         type: "num",
-        visible: false,
-        ai: "Averigua su valor de mercado actual en CLP bas\xE1ndose en la marca, modelo, a\xF1o dado que es un veh\xEDculo usado en Chile."
+        ai: "Averigua su valor de mercado actual en CLP bas\xE1ndose en la marca, modelo, a\xF1o dado que es un veh\xEDculo usado en Chile.",
+        internal: true
       }
     ]
   }
@@ -1256,7 +1235,7 @@ var TYPE_DEFAULTS = {
 };
 function expandFields(fieldDefs) {
   const result = {};
-  const visibleFields = /* @__PURE__ */ new Set();
+  const internalFields = /* @__PURE__ */ new Set();
   for (const field of fieldDefs) {
     const defaultValue = TYPE_DEFAULTS[field.type] ?? "";
     const parts = field.key.split(".");
@@ -1269,11 +1248,11 @@ function expandFields(fieldDefs) {
       current = current[part];
     }
     current[parts[parts.length - 1]] = defaultValue;
-    if (field.visible) {
-      visibleFields.add(field.key);
+    if (field.internal) {
+      internalFields.add(field.key);
     }
   }
-  return { fields: result, visibleFields };
+  return { fields: result, internalFields };
 }
 function generateInstructions(fieldDefs) {
   const simple = [];
@@ -1301,7 +1280,7 @@ function getExpandedDoctypes() {
   const raw = doctypes_default;
   const expanded = {};
   for (const [id, dt] of Object.entries(raw)) {
-    const { fields, visibleFields } = expandFields(dt.fields);
+    const { fields, internalFields } = expandFields(dt.fields);
     expanded[id] = {
       label: dt.label,
       shortLabel: dt.shortLabel,
@@ -1317,7 +1296,7 @@ function getExpandedDoctypes() {
       instructions: generateInstructions(dt.fields),
       fields,
       fieldDefs: dt.fields,
-      visibleFields,
+      internalFields,
       howToObtain: dt.howToObtain
     };
   }
@@ -1369,10 +1348,10 @@ function getCategories() {
   );
   return Array.from(categories);
 }
-function getVisibleFieldKeys(doctypeId) {
+function getInternalFieldKeys(doctypeId) {
   const dt = getDoctypesMap()[doctypeId];
   if (!dt) return [];
-  return [...dt.visibleFields];
+  return [...dt.internalFields];
 }
 function getDocumentDefaults(doctypeid) {
   const dt = getDoctypesMap()[doctypeid];
@@ -1400,6 +1379,6 @@ function applyDefaults(requirements) {
   return result;
 }
 
-export { applyDefaults, getCategories, getDoctype, getDoctypeIds, getDoctypes, getDoctypesByCategory, getDoctypesLegacyFormat, getDoctypesMap, getDocumentDefaults, getVisibleFieldKeys, isDoctypeValid, isMultiInstanceDocType, isRecurring };
+export { applyDefaults, getCategories, getDoctype, getDoctypeIds, getDoctypes, getDoctypesByCategory, getDoctypesLegacyFormat, getDoctypesMap, getDocumentDefaults, getInternalFieldKeys, isDoctypeValid, isMultiInstanceDocType, isRecurring };
 //# sourceMappingURL=index.mjs.map
 //# sourceMappingURL=index.mjs.map
