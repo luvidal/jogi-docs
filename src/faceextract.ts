@@ -108,7 +108,7 @@ export async function extractFace(
 
   // Step 3: Crop with generous padding for portrait-style avatar framing
   // PAD is % of image dimensions added around the face bounding box
-  const PAD = 30
+  const PAD = 8
   let px = Math.max(0, best.bbox.x - PAD)
   let py = Math.max(0, best.bbox.y - PAD)
   let pw = Math.min(best.bbox.width + PAD * 2, 100 - px)
