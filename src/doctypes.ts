@@ -1,9 +1,9 @@
 /**
  * Document types helper library
- * Reads from doctypes.json and expands field objects to full structures
+ * Reads from host-provided doctypes data (injected via configure({ doctypes }))
  */
 
-import doctypesRaw from './doctypes.json'
+import { getRawDoctypes, setResetDoctypesCache } from './config'
 import type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement } from './types'
 
 export type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement }
@@ -100,10 +100,13 @@ function generateInstructions(fieldDefs: FieldDef[]): string {
 // Cache expanded doctypes
 let expandedCache: DoctypesMap | null = null
 
+// Register cache reset so configure() can invalidate on reconfigure
+setResetDoctypesCache(() => { expandedCache = null })
+
 function getExpandedDoctypes(): DoctypesMap {
   if (expandedCache) return expandedCache
 
-  const raw = doctypesRaw as unknown as Record<string, RawDoctype>
+  const raw = getRawDoctypes() as Record<string, RawDoctype>
   const expanded: DoctypesMap = {}
 
   for (const [id, dt] of Object.entries(raw)) {

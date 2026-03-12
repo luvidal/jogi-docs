@@ -1,6 +1,8 @@
 // Universal entry point — no heavy deps (no sharp, no AI SDKs)
 // Safe to import from frontend code
 
+export { configure } from '../config'
+
 export {
   getDoctypesMap,
   getDoctypes,

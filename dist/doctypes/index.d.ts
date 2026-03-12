@@ -1,9 +1,10 @@
+export { c as configure } from '../config-CkevkdwG.js';
 import { D as DocFrequency, d as Doctype, e as DoctypeField, f as DoctypesMap, g as DocRequirement } from '../types-jOhdMz9z.js';
 export { F as FieldDef, H as HowToObtain } from '../types-jOhdMz9z.js';
 
 /**
  * Document types helper library
- * Reads from doctypes.json and expands field objects to full structures
+ * Reads from host-provided doctypes data (injected via configure({ doctypes }))
  */
 
 declare function getDoctypesMap(): DoctypesMap;

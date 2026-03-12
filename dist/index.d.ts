@@ -1,13 +1,6 @@
+export { D as DocProcessorLogger, c as configure } from './config-CkevkdwG.js';
 import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-jOhdMz9z.js';
 export { c as ExtractionDocument } from './types-jOhdMz9z.js';
-
-interface DocProcessorLogger {
-    error(error: unknown, context?: Record<string, unknown>): void;
-    warn(message: string, context?: Record<string, unknown>): void;
-}
-declare function configure(options: {
-    logger?: DocProcessorLogger;
-}): void;
 
 /**
  * OCR and Document Field Extraction
@@ -181,4 +174,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, type DocProcessorLogger, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, configure, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };
