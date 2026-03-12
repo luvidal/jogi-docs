@@ -9,6 +9,7 @@ export { Doc2Fields, detectCedulaSide, extractPdfPageAsImage, getPromptVersion, 
 
 // Composite cedula detection
 export { detectAndSplitCompositeCedula } from './cedula'
+export { detectAndSplitCompositeCedulaV3 } from './cedulasplit'
 
 // Cedula merge
 export { mergeCedulaFiles } from './cedulamerge'

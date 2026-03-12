@@ -2567,6 +2567,102 @@ async function detectAndSplitCompositeCedula(imageBuffer, mimetype, model = "gem
   };
 }
 
+// src/cedulasplit.ts
+init_ai();
+init_ocr();
+init_config();
+var toAiModel2 = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
+var BBOX_PROMPT = `This image may contain both sides of a Chilean ID card (c\xE9dula de identidad).
+
+The FRONT side has: a passport-style photo on the left, the person's name, RUT number, birth date, nationality, and issue/expiry dates.
+The BACK side has: a QR code, fingerprint, MRZ (machine-readable zone), profession, and birthplace.
+
+If this image contains BOTH the front and back sides (stacked vertically, side by side, or in any arrangement), return their locations as percentage coordinates (0\u2013100) of the full image dimensions.
+
+Return JSON:
+{"front": {"x": N, "y": N, "width": N, "height": N}, "back": {"x": N, "y": N, "width": N, "height": N}}
+
+Where:
+- "x" = percentage from left edge of image to left edge of card
+- "y" = percentage from top edge of image to top edge of card
+- "width" = card width as percentage of image width
+- "height" = card height as percentage of image height
+
+If this image does NOT contain both sides (only one card, or not a c\xE9dula at all), return:
+{"front": null, "back": null}
+
+Return ONLY valid JSON.`;
+async function findCardRegionsWithAI(imageBuffer, mimetype, model) {
+  const base64 = imageBuffer.toString("base64");
+  const text = await model2vision(model, mimetype, base64, BBOX_PROMPT);
+  if (!text) return null;
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  const parsed = JSON.parse(jsonMatch[0]);
+  if (!parsed.front || !parsed.back) return null;
+  const isValidBox = (b) => b && typeof b.x === "number" && typeof b.y === "number" && typeof b.width === "number" && typeof b.height === "number" && b.width > 0 && b.height > 0 && b.x >= -5 && b.y >= -5 && b.x + b.width <= 110 && b.y + b.height <= 110;
+  if (!isValidBox(parsed.front) || !isValidBox(parsed.back)) return null;
+  return { front: parsed.front, back: parsed.back };
+}
+async function cropRegion2(buffer, bbox, imgW, imgH) {
+  const PAD = 2;
+  const px = Math.max(0, bbox.x - PAD);
+  const py = Math.max(0, bbox.y - PAD);
+  const pw = Math.min(bbox.width + PAD * 2, 100 - px);
+  const ph = Math.min(bbox.height + PAD * 2, 100 - py);
+  const left = Math.max(0, Math.round(px / 100 * imgW));
+  const top = Math.max(0, Math.round(py / 100 * imgH));
+  const width = Math.min(Math.round(pw / 100 * imgW), imgW - left);
+  const height = Math.min(Math.round(ph / 100 * imgH), imgH - top);
+  if (width <= 10 || height <= 10) return null;
+  return sharp3__default.default(buffer).extract({ left, top, width, height }).toBuffer();
+}
+async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "gemini") {
+  const metadata = await sharp3__default.default(imageBuffer).metadata();
+  const imgW = metadata.width || 0;
+  const imgH = metadata.height || 0;
+  if (!imgW || !imgH) return null;
+  const aiModel = toAiModel2(model);
+  let regions;
+  try {
+    regions = await findCardRegionsWithAI(imageBuffer, mimetype, aiModel);
+  } catch (err) {
+    getLogger().error(err, { module: "cedula-split-v3", action: "findRegions" });
+    return null;
+  }
+  if (!regions) return null;
+  const frontBuf = await cropRegion2(imageBuffer, regions.front, imgW, imgH);
+  const backBuf = await cropRegion2(imageBuffer, regions.back, imgW, imgH);
+  if (!frontBuf || !backBuf) return null;
+  const frontOcr = await Doc2Fields(frontBuf, mimetype, model);
+  const frontDoc = frontOcr?.documents?.[0];
+  if (frontDoc?.doc_type_id !== "cedula-identidad") return null;
+  const backOcr = await Doc2Fields(backBuf, mimetype, model, "cedula-identidad");
+  const backDoc = backOcr?.documents?.[0];
+  const rawBackData = backDoc?.data || {};
+  const backData = {};
+  if (rawBackData.lugar_nacimiento) backData.lugar_nacimiento = rawBackData.lugar_nacimiento;
+  if (rawBackData.profesion) backData.profesion = rawBackData.profesion;
+  return {
+    parts: [
+      {
+        partId: "front",
+        buffer: frontBuf,
+        aiFields: JSON.stringify(frontDoc.data || {}),
+        aiDate: frontDoc.docdate ? /* @__PURE__ */ new Date(`${frontDoc.docdate}T12:00:00`) : null,
+        docdate: frontDoc.docdate || null
+      },
+      {
+        partId: "back",
+        buffer: backBuf,
+        aiFields: JSON.stringify(backData),
+        aiDate: backDoc?.docdate ? /* @__PURE__ */ new Date(`${backDoc.docdate}T12:00:00`) : null,
+        docdate: backDoc?.docdate || frontDoc.docdate || null
+      }
+    ]
+  };
+}
+
 // src/utils.ts
 init_config();
 function safeJsonParse(json, context) {
@@ -2653,6 +2749,7 @@ exports.Doc2Fields = Doc2Fields;
 exports.buildCacheKey = buildCacheKey;
 exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
+exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;
 exports.detectCedulaSide = detectCedulaSide;
 exports.extractPdfPageAsImage = extractPdfPageAsImage;
 exports.generateThumbnailFromImage = generateThumbnailFromImage;

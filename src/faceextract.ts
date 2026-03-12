@@ -1,8 +1,16 @@
 /**
- * Gemini-First Card Detection (V2)
+ * V2 Card Detection — Gemini Bounding Box (Front Only)
  *
- * Uses Gemini to find and crop the front card from an image.
+ * Uses Gemini vision to find and crop the FRONT card from an image.
  * Returns cropped card buffer for the caller to pass to face extraction.
+ *
+ * This was the first AI-based card detection approach, proving that
+ * vision models reliably locate cards regardless of background, angle,
+ * or lighting. However it only finds the front card (for face extraction).
+ *
+ * Extended by: cedulasplit.ts (V3) — same AI bbox approach but finds
+ * BOTH front and back cards for composite splitting.
+ * See also: cedula.ts (V1, pixel heuristics — superseded).
  */
 
 import sharp from 'sharp'

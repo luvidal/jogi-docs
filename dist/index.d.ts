@@ -53,10 +53,28 @@ declare function detectCedulaSide(buffer: Buffer, mimetype: string, model?: Mode
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string): Promise<ExtractionResult>;
 
 /**
- * Composite Cedula Detection & Splitting
+ * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
  *
  * Detects images containing both sides of a Chilean ID card (front + back
  * stacked vertically) and splits them into separate card images with AI verification.
+ *
+ * Algorithm:
+ *  1. Aspect ratio gate (height/width > 1.2)
+ *  2. Greyscale row analysis — brightness-based gap finding (≤5% dark pixels)
+ *  3. Fallback — variance-based gap finding (median × 0.15 threshold)
+ *  4. Last resort — naïve 50/50 split at image midpoint
+ *  5. AI verification — Doc2Fields on each half to confirm cedula
+ *
+ * Limitations that led to V3:
+ *  - Dark backgrounds defeat brightness-based gap detection
+ *  - Angled/rotated photos have no clean horizontal gap
+ *  - Shadows, fingers, or objects between cards create false gaps
+ *  - Side-by-side layouts rejected by aspect ratio gate
+ *  - 50/50 fallback almost always crops through the card
+ *  - Each heuristic fix broke other edge cases (whack-a-mole)
+ *
+ * Superseded by: cedulasplit.ts (V3) — AI bounding box detection.
+ * Kept for reference. See also: faceextract.ts (V2, front-card-only).
  *
  * Pure function: buffer in, result out. No DB/S3 side effects.
  */
@@ -73,6 +91,40 @@ declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, 
 declare function detectAndSplitCompositeCedula(imageBuffer: Buffer, mimetype: string, model?: ModelArg): Promise<CompositeCedulaResult | null>;
 
 /**
+ * V3 Composite Cedula Detection — AI Bounding Boxes
+ *
+ * Sends the full image to an AI vision model and asks it to locate
+ * both the front and back cards as percentage-based bounding boxes.
+ * Crops with sharp, then runs Doc2Fields for field extraction.
+ *
+ * Replaces V1 (cedula.ts) which used pixel-level row heuristics
+ * (brightness/variance gap-finding) that broke on dark backgrounds,
+ * angled photos, shadows, overlapping cards, and non-standard layouts.
+ *
+ * Inspired by V2 (faceextract.ts) which proved AI bounding boxes work
+ * for locating the front card. V3 extends that to both cards.
+ *
+ * Key differences from V1:
+ *  - No aspect ratio gate — the AI decides if the image is composite
+ *  - No pixel heuristics — no findBestSplit, no brightness/variance
+ *  - No 50/50 fallback — if AI can't find two cards, returns null
+ *  - Uses model2vision() from ai.ts (multi-model fallback + retry)
+ *
+ * Pure function: buffer in, result out. No DB/S3 side effects.
+ */
+
+/**
+ * Detect if an image contains a composite cedula (front + back) and split
+ * it into two separate card images with AI-extracted fields.
+ *
+ * Pure function: buffer in, result out. No DB/S3 side effects.
+ * Callers must convert PDF pages to images before calling this.
+ *
+ * @returns CompositeCedulaResult if composite cedula detected, null otherwise
+ */
+declare function detectAndSplitCompositeCedulaV3(imageBuffer: Buffer, mimetype: string, model?: ModelArg): Promise<CompositeCedulaResult | null>;
+
+/**
  * Merge front + back cedula files into a single personal data object.
  * Front: rut, nombres, apellidos, fecha_nacimiento, nacionalidad, foto_base64
  * Back: profesion, lugar_nacimiento
@@ -84,4 +136,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, type DocProcessorLogger, ExtractionResult, MergedCedula, ModelArg, buildCacheKey, configure, detectAndSplitCompositeCedula, detectCedulaSide, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, type DocProcessorLogger, ExtractionResult, MergedCedula, ModelArg, buildCacheKey, configure, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };

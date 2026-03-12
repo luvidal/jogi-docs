@@ -1,8 +1,26 @@
 /**
- * Composite Cedula Detection & Splitting
+ * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
  *
  * Detects images containing both sides of a Chilean ID card (front + back
  * stacked vertically) and splits them into separate card images with AI verification.
+ *
+ * Algorithm:
+ *  1. Aspect ratio gate (height/width > 1.2)
+ *  2. Greyscale row analysis — brightness-based gap finding (≤5% dark pixels)
+ *  3. Fallback — variance-based gap finding (median × 0.15 threshold)
+ *  4. Last resort — naïve 50/50 split at image midpoint
+ *  5. AI verification — Doc2Fields on each half to confirm cedula
+ *
+ * Limitations that led to V3:
+ *  - Dark backgrounds defeat brightness-based gap detection
+ *  - Angled/rotated photos have no clean horizontal gap
+ *  - Shadows, fingers, or objects between cards create false gaps
+ *  - Side-by-side layouts rejected by aspect ratio gate
+ *  - 50/50 fallback almost always crops through the card
+ *  - Each heuristic fix broke other edge cases (whack-a-mole)
+ *
+ * Superseded by: cedulasplit.ts (V3) — AI bounding box detection.
+ * Kept for reference. See also: faceextract.ts (V2, front-card-only).
  *
  * Pure function: buffer in, result out. No DB/S3 side effects.
  */
