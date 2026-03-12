@@ -24,6 +24,7 @@
 import sharp from 'sharp'
 import { model2vision } from './ai'
 import { Doc2Fields } from './ocr'
+import { extractFace } from './faceextract'
 import { getLogger } from './config'
 import type { CompositeCedulaResult, ModelArg } from './types'
 
@@ -45,23 +46,23 @@ interface CardRegions {
   back: BBox
 }
 
-const BBOX_PROMPT = `This image may contain both sides of a Chilean ID card (cédula de identidad).
+const BBOX_PROMPT = `You are looking at a photograph or scan of a Chilean ID card (cédula de identidad). The image likely contains BOTH sides of the card — front and back — in a single image.
 
-The FRONT side has: a passport-style photo on the left, the person's name, RUT number, birth date, nationality, and issue/expiry dates.
-The BACK side has: a QR code, fingerprint, MRZ (machine-readable zone), profession, and birthplace.
+How to identify each side:
+- FRONT: Has a passport-style PHOTO of a person on the left side, plus text fields: name (APELLIDOS/NOMBRES), RUT number, birth date, nationality, sex, issue/expiry dates, and a signature. The header reads "CÉDULA DE IDENTIDAD" and "REPÚBLICA DE CHILE".
+- BACK: Has a QR code (top-left), a fingerprint (right side), MRZ machine-readable lines at the bottom (starts with INCHL...), and text fields: birthplace (Nació en), profession (Profesión).
 
-If this image contains BOTH the front and back sides (stacked vertically, side by side, or in any arrangement), return their locations as percentage coordinates (0–100) of the full image dimensions.
+Common layouts: cards stacked vertically (front on top, back below), side by side, or at slight angles. There is usually a visible gap or background between the two cards.
 
-Return JSON:
+Return the bounding box of EACH side as percentage coordinates (0–100) of the full image:
 {"front": {"x": N, "y": N, "width": N, "height": N}, "back": {"x": N, "y": N, "width": N, "height": N}}
 
-Where:
-- "x" = percentage from left edge of image to left edge of card
-- "y" = percentage from top edge of image to top edge of card
-- "width" = card width as percentage of image width
-- "height" = card height as percentage of image height
+Where x/y is the top-left corner of the card as a percentage of image width/height, and width/height is the card's size as a percentage of image dimensions.
 
-If this image does NOT contain both sides (only one card, or not a cédula at all), return:
+Example for vertically stacked cards:
+{"front": {"x": 2, "y": 1, "width": 96, "height": 46}, "back": {"x": 2, "y": 52, "width": 96, "height": 46}}
+
+If you can only see ONE side of the card, return:
 {"front": null, "back": null}
 
 Return ONLY valid JSON.`
@@ -155,15 +156,32 @@ export async function detectAndSplitCompositeCedulaV3(
   }
   if (!regions) return null
 
-  // Step 2: Crop both cards
-  const frontBuf = await cropRegion(imageBuffer, regions.front, imgW, imgH)
-  const backBuf = await cropRegion(imageBuffer, regions.back, imgW, imgH)
+  // Step 2: Crop both cards, then trim whitespace borders.
+  // Gemini bboxes often include surrounding whitespace (especially on scans),
+  // which breaks downstream face extraction (left 40% becomes mostly blank).
+  // sharp.trim() removes uniform-color borders to get a tight card crop.
+  let frontBuf = await cropRegion(imageBuffer, regions.front, imgW, imgH)
+  let backBuf = await cropRegion(imageBuffer, regions.back, imgW, imgH)
   if (!frontBuf || !backBuf) return null
+  // Explicitly trim white borders — trim() auto-detects from top-left pixel,
+  // which is often card-colored (blue), not the white background we need to remove.
+  // Threshold 80 needed: scan backgrounds are light gray (#E0E0E0),
+  // Euclidean distance from #FFF is ~54, so threshold 40 misses them.
+  const trimOpts = { background: '#FFFFFF', threshold: 80 }
+  try { frontBuf = await sharp(frontBuf).trim(trimOpts).toBuffer() } catch {}
+  try { backBuf = await sharp(backBuf).trim(trimOpts).toBuffer() } catch {}
 
   // Step 3: Extract fields from front — must classify as cedula
-  const frontOcr = await Doc2Fields(frontBuf, mimetype, model)
+  // skipFace: V3 handles face extraction separately via Rekognition
+  const frontOcr = await Doc2Fields(frontBuf, mimetype, model, undefined, { skipFace: true })
   const frontDoc = frontOcr?.documents?.[0]
   if (frontDoc?.doc_type_id !== 'cedula-identidad') return null
+
+  // Step 3b: Extract face via Rekognition (picks largest face, ignores ghost hologram)
+  const frontData = (frontDoc.data || {}) as Record<string, any>
+  delete frontData.foto_bbox
+  const faceResult = await extractFace(frontBuf)
+  if (faceResult) frontData.foto_base64 = faceResult.face
 
   // Step 4: Extract fields from back — force doctype since QR/fingerprint/MRZ
   // often fail auto-classification
@@ -180,7 +198,7 @@ export async function detectAndSplitCompositeCedulaV3(
       {
         partId: 'front',
         buffer: frontBuf,
-        aiFields: JSON.stringify(frontDoc.data || {}),
+        aiFields: JSON.stringify(frontData),
         aiDate: frontDoc.docdate ? new Date(`${frontDoc.docdate}T12:00:00`) : null,
         docdate: frontDoc.docdate || null,
       },

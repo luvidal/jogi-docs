@@ -9,7 +9,8 @@ Extracted from Jogi to isolate AI/document complexity and enable independent tes
 - **Build**: tsup (ESM + CJS + types)
 - **Tests**: vitest
 - **AI**: Gemini 2.0 Flash (primary), Claude Haiku (fallback), GPT-4o
-- **Image**: sharp, smartcrop-sharp
+- **Image**: sharp
+- **Face Detection**: AWS Rekognition
 - **PDF**: pdf-lib, pdf-to-png-converter
 
 ## Project Structure
@@ -23,8 +24,7 @@ src/
 ├── config.ts             # configure() — pluggable logger
 ├── ai.ts                 # Multi-model LLM abstraction
 ├── ocr.ts                # Doc2Fields pipeline
-├── facedetect.ts         # Smartcrop face detection (Tier 2)
-├── faceextract.ts        # Gemini card detection (V2)
+├── faceextract.ts        # Face extraction (V4, AWS Rekognition)
 ├── cedula.ts             # Composite cedula detection/splitting
 ├── cedulamerge.ts        # Front/back field merging
 ├── thumbnail.ts          # Pure thumbnail generation

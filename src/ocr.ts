@@ -14,15 +14,14 @@
  * Pass 2 — Extract: per-type field schemas, parallel across types
  *
  * ## Face Photo Extraction (Cédula)
- * 3-tier fallback: Gemini bbox → smartcrop → fixed bbox
+ * AWS Rekognition via extractFace() — single call, picks largest face.
  */
 
 import { model2vision } from './ai'
 import { getDoctypes, getDoctypesMap } from './doctypes'
 import { getLogger } from './config'
 import { PDFDocument } from 'pdf-lib'
-import { detectAndCropFace } from './facedetect'
-import { cropCardWithGemini } from './faceextract'
+import { extractFace } from './faceextract'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
 import type { ModelArg, ExtractionResult } from './types'
@@ -64,176 +63,6 @@ const getPdfToPng = async () => {
     return pdfToPngModule.pdfToPng
 }
 
-// Lazy-loaded Gemini client for face extraction
-let geminiClient: any = null
-const getGemini = async () => {
-    if (!geminiClient) {
-        const { GoogleGenAI } = await import('@google/genai')
-        geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' })
-    }
-    return geminiClient
-}
-
-let geminiFaceCooldownUntil = 0
-
-async function extractFaceWithGemini(imageBuffer: Buffer): Promise<string | null> {
-    if (!process.env.GEMINI_API_KEY) return null
-    if (Date.now() < geminiFaceCooldownUntil) return null
-
-    try {
-        const metadata = await sharp(imageBuffer).metadata()
-        if (!metadata.width || !metadata.height) return null
-
-        const base64 = imageBuffer.toString('base64')
-        const gemini = await getGemini()
-
-        const prompt = `Analyze this scanned document containing a Chilean ID card (cédula de identidad).
-
-The ID card has a RECTANGULAR PHOTOGRAPH of a person's face in the upper-left area of the card. This photo shows their head, neck and shoulders against a light background.
-
-Locate this rectangular ID photograph and return its bounding box coordinates.
-
-IMPORTANT: Return coordinates as [y_min, x_min, y_max, x_max] normalized to 0-1000 scale.
-
-Example response format:
-{"box": [50, 80, 180, 200]}
-
-Return ONLY valid JSON, nothing else.`
-
-        const result = await gemini.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: {
-                parts: [
-                    { text: prompt },
-                    { inlineData: { mimeType: 'image/png', data: base64 } },
-                ],
-            },
-        })
-
-        const text = result.text || ''
-        const jsonMatch = text.match(/\{[\s\S]*\}/)
-        if (!jsonMatch) return null
-
-        const parsed = JSON.parse(jsonMatch[0])
-        const box = parsed.box
-        if (!Array.isArray(box) || box.length !== 4) return null
-
-        const [ymin, xmin, ymax, xmax] = box
-        const imgW = metadata.width
-        const imgH = metadata.height
-
-        const left = Math.round((xmin / 1000) * imgW)
-        const top = Math.round((ymin / 1000) * imgH)
-        const width = Math.round(((xmax - xmin) / 1000) * imgW)
-        const height = Math.round(((ymax - ymin) / 1000) * imgH)
-
-        if (width <= 10 || height <= 10) return null
-        if (left < 0 || top < 0 || left + width > imgW || top + height > imgH) return null
-
-        const photo = await sharp(imageBuffer)
-            .extract({ left, top, width, height })
-            .resize(256, 256, { fit: 'cover' })
-            .jpeg({ quality: 92 })
-            .toBuffer()
-
-        if (photo.length < 5000) return null
-
-        return photo.toString('base64')
-    } catch (err: any) {
-        if (err?.status === 429 || err?.httpErrorCode === 429 || err?.message?.includes('429') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
-            geminiFaceCooldownUntil = Date.now() + 60_000
-        }
-        getLogger().error(err, { module: 'ocr', action: 'gemini-face-extraction' })
-        return null
-    }
-}
-
-const ASPECT_RATIO_THRESHOLD = 1.2
-
-async function detectCedulaBounds(buffer: Buffer): Promise<{
-    left: number
-    top: number
-    width: number
-    height: number
-} | null> {
-    try {
-        const { data, info } = await sharp(buffer)
-            .greyscale()
-            .raw()
-            .toBuffer({ resolveWithObject: true })
-
-        const rowBrightness: number[] = []
-        for (let y = 0; y < info.height; y++) {
-            let darkPixels = 0
-            for (let x = 0; x < info.width; x++) {
-                const brightness = data[y * info.width + x]
-                if (brightness < 200) darkPixels++
-            }
-            rowBrightness.push(darkPixels / info.width)
-        }
-
-        let topRow = 0
-        let bottomRow = info.height - 1
-        const threshold = 0.05
-
-        for (let y = 0; y < info.height; y++) {
-            if (rowBrightness[y] > threshold) {
-                topRow = y
-                break
-            }
-        }
-        for (let y = info.height - 1; y >= 0; y--) {
-            if (rowBrightness[y] > threshold) {
-                bottomRow = y
-                break
-            }
-        }
-
-        const colBrightness: number[] = []
-        for (let x = 0; x < info.width; x++) {
-            let darkPixels = 0
-            for (let y = 0; y < info.height; y++) {
-                const brightness = data[y * info.width + x]
-                if (brightness < 200) darkPixels++
-            }
-            colBrightness.push(darkPixels / info.height)
-        }
-
-        let leftCol = 0
-        let rightCol = info.width - 1
-        for (let x = 0; x < info.width; x++) {
-            if (colBrightness[x] > threshold) {
-                leftCol = x
-                break
-            }
-        }
-        for (let x = info.width - 1; x >= 0; x--) {
-            if (colBrightness[x] > threshold) {
-                rightCol = x
-                break
-            }
-        }
-
-        const detectedWidth = rightCol - leftCol
-        const detectedHeight = bottomRow - topRow
-        const originalArea = info.width * info.height
-        const detectedArea = detectedWidth * detectedHeight
-
-        if (detectedArea < originalArea * 0.85 && detectedWidth > 100 && detectedHeight > 50) {
-            const padding = 10
-            return {
-                left: Math.max(0, leftCol - padding),
-                top: Math.max(0, topRow - padding),
-                width: Math.min(detectedWidth + padding * 2, info.width - leftCol + padding),
-                height: Math.min(detectedHeight + padding * 2, info.height - topRow + padding)
-            }
-        }
-        return null
-    } catch {
-        return null
-    }
-}
-
 /**
  * Extract a specific page from a PDF as a PNG image buffer
  */
@@ -255,112 +84,6 @@ export async function extractPdfPageAsImage(pdfBuffer: Buffer, pageNumber: numbe
             return Buffer.from(pages[0].content)
         }
         return null
-    } catch {
-        return null
-    }
-}
-
-async function cropToFrontCard(imageBuffer: Buffer): Promise<Buffer> {
-    try {
-        const bounds = await detectCedulaBounds(imageBuffer)
-        let workBuffer = imageBuffer
-        let w: number, h: number
-
-        if (bounds) {
-            workBuffer = await sharp(imageBuffer).extract(bounds).toBuffer()
-            w = bounds.width
-            h = bounds.height
-        } else {
-            const meta = await sharp(imageBuffer).metadata()
-            if (!meta.width || !meta.height) return imageBuffer
-            w = meta.width
-            h = meta.height
-        }
-
-        if (h / w > ASPECT_RATIO_THRESHOLD) {
-            const halfH = Math.round(h / 2)
-            workBuffer = await sharp(workBuffer)
-                .extract({ left: 0, top: 0, width: w, height: halfH })
-                .toBuffer()
-
-            const frontBounds = await detectCedulaBounds(workBuffer)
-            if (frontBounds) {
-                workBuffer = await sharp(workBuffer).extract(frontBounds).toBuffer()
-            }
-        }
-
-        return workBuffer
-    } catch {
-        return imageBuffer
-    }
-}
-
-const CEDULA_PHOTO_BBOX = { x: 2, y: 5, width: 30, height: 55 }
-
-async function cropPhotoFromImage(
-    buffer: Buffer,
-    bbox: { x: number; y: number; width: number; height: number }
-): Promise<string | null> {
-    try {
-        const cedulaBounds = await detectCedulaBounds(buffer)
-        let workingBuffer = buffer
-        let workingWidth: number
-        let workingHeight: number
-
-        if (cedulaBounds) {
-            workingBuffer = await sharp(buffer)
-                .extract(cedulaBounds)
-                .toBuffer()
-            workingWidth = cedulaBounds.width
-            workingHeight = cedulaBounds.height
-        } else {
-            const metadata = await sharp(buffer).metadata()
-            if (!metadata.width || !metadata.height) return null
-            workingWidth = metadata.width
-            workingHeight = metadata.height
-        }
-
-        const aspectRatio = workingHeight / workingWidth
-        if (aspectRatio > ASPECT_RATIO_THRESHOLD) {
-            const halfHeight = Math.round(workingHeight / 2)
-            workingBuffer = await sharp(workingBuffer)
-                .extract({ left: 0, top: 0, width: workingWidth, height: halfHeight })
-                .toBuffer()
-            workingHeight = halfHeight
-
-            const frontBounds = await detectCedulaBounds(workingBuffer)
-            if (frontBounds) {
-                workingBuffer = await sharp(workingBuffer)
-                    .extract(frontBounds)
-                    .toBuffer()
-                workingWidth = frontBounds.width
-                workingHeight = frontBounds.height
-            }
-        }
-
-        const left = Math.round((bbox.x / 100) * workingWidth)
-        const top = Math.round((bbox.y / 100) * workingHeight)
-        const width = Math.round((bbox.width / 100) * workingWidth)
-        const height = Math.round((bbox.height / 100) * workingHeight)
-
-        const safeLeft = Math.max(0, Math.min(left, workingWidth - 1))
-        const safeTop = Math.max(0, Math.min(top, workingHeight - 1))
-        const safeWidth = Math.min(width, workingWidth - safeLeft)
-        const safeHeight = Math.min(height, workingHeight - safeTop)
-
-        if (safeWidth <= 0 || safeHeight <= 0) return null
-
-        const croppedBuffer = await sharp(workingBuffer)
-            .extract({ left: safeLeft, top: safeTop, width: safeWidth, height: safeHeight })
-            .resize(256, 256, { fit: 'cover' })
-            .jpeg({ quality: 92 })
-            .toBuffer()
-
-        if (croppedBuffer.length < 5000) {
-            return null
-        }
-
-        return croppedBuffer.toString('base64')
     } catch {
         return null
     }
@@ -444,27 +167,9 @@ export async function detectCedulaSide(
             }
 
             if (imageBuffer) {
-                const cardCrop = await cropCardWithGemini(imageBuffer)
-                const cardImage = cardCrop || await cropToFrontCard(imageBuffer)
-
-                let foto_base64 = await extractFaceWithGemini(cardImage)
-
-                if (!foto_base64) {
-                    foto_base64 = await detectAndCropFace(cardImage)
-                }
-
-                if (!foto_base64) {
-                    const aiBbox = data.foto_bbox
-                    const hasBbox = aiBbox &&
-                        typeof aiBbox.x === 'number' && typeof aiBbox.y === 'number' &&
-                        typeof aiBbox.width === 'number' && typeof aiBbox.height === 'number'
-
-                    const bbox = hasBbox ? aiBbox : CEDULA_PHOTO_BBOX
-                    foto_base64 = await cropPhotoFromImage(cardImage, bbox)
-                }
-
-                if (foto_base64) {
-                    data.foto_base64 = foto_base64
+                const result = await extractFace(imageBuffer)
+                if (result) {
+                    data.foto_base64 = result.face
                 }
             }
             delete data.foto_bbox
@@ -658,7 +363,8 @@ export async function Doc2Fields(
     buffer: Buffer,
     mimetype: string,
     model: ModelArg = 'gemini',
-    forcedDoctypeId?: string
+    forcedDoctypeId?: string,
+    options?: { skipFace?: boolean }
 ): Promise<ExtractionResult> {
     const isImage = mimetype.startsWith('image/')
     const isPDF = mimetype === 'application/pdf'
@@ -852,11 +558,12 @@ export async function Doc2Fields(
         }
     }
 
-    // Process documents, handling foto_bbox for cedulas
+    // Process documents, handling face extraction for cedulas
+    const skipFace = options?.skipFace === true
     const documents = await Promise.all(allRawDocs.map(async (d: any) => {
         const { id, data, docdate, start, end, partId } = normalizeDoc(d)
 
-        if (id === 'cedula-identidad' && partId === 'front') {
+        if (id === 'cedula-identidad' && partId === 'front' && !skipFace) {
             let imageBuffer: Buffer | null = null
 
             if (isImage) {
@@ -866,27 +573,9 @@ export async function Doc2Fields(
             }
 
             if (imageBuffer) {
-                const cardCrop = await cropCardWithGemini(imageBuffer)
-                const cardImage = cardCrop || await cropToFrontCard(imageBuffer)
-
-                let foto_base64 = await extractFaceWithGemini(cardImage)
-
-                if (!foto_base64) {
-                    foto_base64 = await detectAndCropFace(cardImage)
-                }
-
-                if (!foto_base64) {
-                    const aiBbox = data.foto_bbox
-                    const hasBbox = aiBbox &&
-                        typeof aiBbox.x === 'number' && typeof aiBbox.y === 'number' &&
-                        typeof aiBbox.width === 'number' && typeof aiBbox.height === 'number'
-
-                    const bbox = hasBbox ? aiBbox : CEDULA_PHOTO_BBOX
-                    foto_base64 = await cropPhotoFromImage(cardImage, bbox)
-                }
-
-                if (foto_base64) {
-                    data.foto_base64 = foto_base64
+                const result = await extractFace(imageBuffer)
+                if (result) {
+                    data.foto_base64 = result.face
                 }
             }
             delete data.foto_bbox

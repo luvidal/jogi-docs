@@ -1,14 +1,13 @@
 'use strict';
 
-var smartcrop = require('smartcrop-sharp');
-var sharp3 = require('sharp');
+var sharp2 = require('sharp');
+var clientRekognition = require('@aws-sdk/client-rekognition');
 var pdfLib = require('pdf-lib');
 var crypto = require('crypto');
 
 function _interopDefault (e) { return e && e.__esModule ? e : { default: e }; }
 
-var smartcrop__default = /*#__PURE__*/_interopDefault(smartcrop);
-var sharp3__default = /*#__PURE__*/_interopDefault(sharp3);
+var sharp2__default = /*#__PURE__*/_interopDefault(sharp2);
 
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -1481,184 +1480,79 @@ var init_doctypes2 = __esm({
     expandedCache = null;
   }
 });
-async function detectCardBounds(buffer) {
-  try {
-    const { data, info } = await sharp3__default.default(buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
-    let minX = info.width, maxX = 0, minY = info.height, maxY = 0;
-    const threshold = 140;
-    for (let y = 0; y < info.height; y++) {
-      for (let x = 0; x < info.width; x++) {
-        const brightness = data[y * info.width + x];
-        if (brightness > threshold) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (maxX > minX && maxY > minY) {
-      const originalArea = info.width * info.height;
-      const detectedArea = (maxX - minX) * (maxY - minY);
-      if (detectedArea < originalArea * 0.9) {
-        return {
-          left: Math.max(0, minX - 5),
-          top: Math.max(0, minY - 5),
-          width: Math.min(maxX - minX + 10, info.width - minX),
-          height: Math.min(maxY - minY + 10, info.height - minY)
-        };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-async function detectAndCropFace(buffer) {
-  try {
-    const cardBounds = await detectCardBounds(buffer);
-    let cardBuffer = buffer;
-    let width, height;
-    if (cardBounds) {
-      cardBuffer = await sharp3__default.default(buffer).extract(cardBounds).toBuffer();
-      width = cardBounds.width;
-      height = cardBounds.height;
-    } else {
-      const metadata = await sharp3__default.default(buffer).metadata();
-      if (!metadata.width || !metadata.height) return null;
-      width = metadata.width;
-      height = metadata.height;
-    }
-    const aspectRatio = height / width;
-    const isComposite = aspectRatio > 1.2;
-    const regionHeight = isComposite ? Math.round(height * 0.5) : height;
-    const regionWidth = Math.round(width * 0.4);
-    const regionBuffer = await sharp3__default.default(cardBuffer).extract({
-      left: 0,
-      top: 0,
-      width: regionWidth,
-      height: regionHeight
-    }).toBuffer();
-    const faceWidth = Math.round(regionWidth * 0.5);
-    const faceHeight = Math.round(regionHeight * 0.6);
-    const boostRegion = {
-      x: Math.round(regionWidth * 0.05),
-      y: Math.round(regionHeight * 0.05),
-      width: Math.round(regionWidth * 0.6),
-      height: Math.round(regionHeight * 0.7),
-      weight: 2
-    };
-    const result = await smartcrop__default.default.crop(regionBuffer, {
-      width: faceWidth,
-      height: faceHeight,
-      boost: [boostRegion]
-    });
-    const crop = result.topCrop;
-    const croppedBuffer = await sharp3__default.default(regionBuffer).extract({
-      left: crop.x,
-      top: crop.y,
-      width: crop.width,
-      height: crop.height
-    }).resize(256, 256, { fit: "cover" }).jpeg({ quality: 92 }).toBuffer();
-    if (croppedBuffer.length < 5e3) {
-      return null;
-    }
-    return croppedBuffer.toString("base64");
-  } catch (err) {
-    getLogger().error(err, { module: "face-detect", action: "detect-face" });
-    return null;
-  }
-}
-var init_facedetect = __esm({
-  "src/facedetect.ts"() {
-    init_config();
-  }
-});
-async function cropCardWithGemini(imageBuffer) {
-  if (!process.env.GEMINI_API_KEY) return null;
-  if (Date.now() < cooldownUntil) return null;
-  try {
-    const metadata = await sharp3__default.default(imageBuffer).metadata();
-    if (!metadata.width || !metadata.height) return null;
-    const cardBbox = await findCard(imageBuffer);
-    if (!cardBbox) return null;
-    const cardBuffer = await cropRegion(imageBuffer, cardBbox, metadata.width, metadata.height);
-    return cardBuffer;
-  } catch (err) {
-    if (err?.status === 429 || err?.httpErrorCode === 429 || err?.message?.includes("429") || err?.message?.includes("RESOURCE_EXHAUSTED")) {
-      cooldownUntil = Date.now() + 6e4;
-    }
-    getLogger().error(err, { module: "face-extract-v2", action: "cropCard" });
-    return null;
-  }
-}
-async function findCard(imageBuffer) {
-  const base64 = imageBuffer.toString("base64");
-  const gemini = await getGemini2();
-  const prompt = `Find the FRONT side of a Chilean ID card (c\xE9dula de identidad) in this image.
-
-The FRONT side has a passport-style photo on the left. The BACK side has text only, no photo.
-
-If the image contains both front and back (composite scan), locate ONLY the front side.
-If only one card is visible, determine if it's the front (has photo) or back (no photo).
-
-Return JSON with the front card's location as PERCENTAGES (0-100) of the FULL IMAGE:
-
-{"card": {"x": 5, "y": 10, "width": 90, "height": 40}}
-
-- "x" = percentage from LEFT edge of image to left edge of card
-- "y" = percentage from TOP edge of image to top edge of card
-- "width" = card width as percentage of image width
-- "height" = card height as percentage of image height
-- If no front side c\xE9dula is visible, return {"card": null}
-- Return ONLY valid JSON, no markdown.`;
-  const result = await gemini.models.generateContent({
-    model: "gemini-2.0-flash",
-    contents: {
-      parts: [
-        { text: prompt },
-        { inlineData: { mimeType: "image/jpeg", data: base64 } }
-      ]
-    }
+function getClient(opts) {
+  if (_client) return _client;
+  _client = new clientRekognition.RekognitionClient({
+    region: opts?.region || process.env.AWS_REGION || "us-east-1",
+    ...opts?.credentials ? { credentials: opts.credentials } : {}
   });
-  const text = result.text || "";
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-  const parsed = JSON.parse(jsonMatch[0]);
-  if (!parsed.card) return null;
-  const c = parsed.card;
-  if (typeof c.x !== "number" || typeof c.y !== "number" || typeof c.width !== "number" || typeof c.height !== "number") return null;
-  return c;
+  return _client;
 }
-async function cropRegion(buffer, bbox, imgW, imgH) {
-  const { x, y, width: bw, height: bh } = bbox;
-  if (x < 0 || y < 0 || bw <= 0 || bh <= 0) return null;
-  if (x + bw > 110 || y + bh > 110) return null;
-  const pad = 2;
-  const px = Math.max(0, x - pad);
-  const py = Math.max(0, y - pad);
-  const pw = Math.min(bw + pad * 2, 100 - px);
-  const ph = Math.min(bh + pad * 2, 100 - py);
+async function extractFace(imageBuffer, _mimetype, _model, opts) {
+  const log = getLogger();
+  const metadata = await sharp2__default.default(imageBuffer).metadata();
+  const imgW = metadata.width || 0;
+  const imgH = metadata.height || 0;
+  if (!imgW || !imgH) return null;
+  const client = getClient(opts);
+  let faces;
+  try {
+    const cmd = new clientRekognition.DetectFacesCommand({
+      Image: { Bytes: imageBuffer },
+      Attributes: ["DEFAULT"]
+    });
+    const res = await client.send(cmd);
+    const details = res.FaceDetails || [];
+    if (details.length === 0) return null;
+    faces = details.map((d) => {
+      const bb = d.BoundingBox;
+      const x = (bb.Left || 0) * 100;
+      const y = (bb.Top || 0) * 100;
+      const width2 = (bb.Width || 0) * 100;
+      const height2 = (bb.Height || 0) * 100;
+      return {
+        bbox: { x, y, width: width2, height: height2 },
+        confidence: d.Confidence || 0,
+        area: width2 * height2
+      };
+    });
+  } catch (err) {
+    log.error(err, { module: "face-extract-v4", action: "rekognition-detect" });
+    return null;
+  }
+  faces.sort((a, b) => b.area - a.area);
+  const best = faces[0];
+  const PAD = 5;
+  const px = Math.max(0, best.bbox.x - PAD);
+  const py = Math.max(0, best.bbox.y - PAD);
+  const pw = Math.min(best.bbox.width + PAD * 2, 100 - px);
+  const ph = Math.min(best.bbox.height + PAD * 2, 100 - py);
   const left = Math.max(0, Math.round(px / 100 * imgW));
   const top = Math.max(0, Math.round(py / 100 * imgH));
   const width = Math.min(Math.round(pw / 100 * imgW), imgW - left);
   const height = Math.min(Math.round(ph / 100 * imgH), imgH - top);
   if (width <= 10 || height <= 10) return null;
-  return sharp3__default.default(buffer).extract({ left, top, width, height }).toBuffer();
+  let face;
+  try {
+    const photo = await sharp2__default.default(imageBuffer).extract({ left, top, width, height }).resize(256, 256, { fit: "cover" }).jpeg({ quality: 92 }).toBuffer();
+    if (photo.length < 5e3) return null;
+    face = photo.toString("base64");
+  } catch (err) {
+    log.error(err, { module: "face-extract-v4", action: "crop" });
+    return null;
+  }
+  return {
+    face,
+    bbox: best.bbox,
+    confidence: best.confidence,
+    facesDetected: faces.length
+  };
 }
-var geminiClient2, getGemini2, cooldownUntil;
+var _client;
 var init_faceextract = __esm({
   "src/faceextract.ts"() {
     init_config();
-    geminiClient2 = null;
-    getGemini2 = async () => {
-      if (!geminiClient2) {
-        const { GoogleGenAI } = await import('@google/genai');
-        geminiClient2 = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-      }
-      return geminiClient2;
-    };
-    cooldownUntil = 0;
+    _client = null;
   }
 });
 
@@ -1679,129 +1573,6 @@ function getPromptVersion() {
 function buildCacheKey(fileHash, model, promptVersion) {
   return crypto.createHash("sha256").update(fileHash + model + promptVersion).digest("hex").slice(0, 32);
 }
-async function extractFaceWithGemini(imageBuffer) {
-  if (!process.env.GEMINI_API_KEY) return null;
-  if (Date.now() < geminiFaceCooldownUntil) return null;
-  try {
-    const metadata = await sharp3__default.default(imageBuffer).metadata();
-    if (!metadata.width || !metadata.height) return null;
-    const base64 = imageBuffer.toString("base64");
-    const gemini = await getGemini3();
-    const prompt = `Analyze this scanned document containing a Chilean ID card (c\xE9dula de identidad).
-
-The ID card has a RECTANGULAR PHOTOGRAPH of a person's face in the upper-left area of the card. This photo shows their head, neck and shoulders against a light background.
-
-Locate this rectangular ID photograph and return its bounding box coordinates.
-
-IMPORTANT: Return coordinates as [y_min, x_min, y_max, x_max] normalized to 0-1000 scale.
-
-Example response format:
-{"box": [50, 80, 180, 200]}
-
-Return ONLY valid JSON, nothing else.`;
-    const result = await gemini.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: {
-        parts: [
-          { text: prompt },
-          { inlineData: { mimeType: "image/png", data: base64 } }
-        ]
-      }
-    });
-    const text = result.text || "";
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    const box = parsed.box;
-    if (!Array.isArray(box) || box.length !== 4) return null;
-    const [ymin, xmin, ymax, xmax] = box;
-    const imgW = metadata.width;
-    const imgH = metadata.height;
-    const left = Math.round(xmin / 1e3 * imgW);
-    const top = Math.round(ymin / 1e3 * imgH);
-    const width = Math.round((xmax - xmin) / 1e3 * imgW);
-    const height = Math.round((ymax - ymin) / 1e3 * imgH);
-    if (width <= 10 || height <= 10) return null;
-    if (left < 0 || top < 0 || left + width > imgW || top + height > imgH) return null;
-    const photo = await sharp3__default.default(imageBuffer).extract({ left, top, width, height }).resize(256, 256, { fit: "cover" }).jpeg({ quality: 92 }).toBuffer();
-    if (photo.length < 5e3) return null;
-    return photo.toString("base64");
-  } catch (err) {
-    if (err?.status === 429 || err?.httpErrorCode === 429 || err?.message?.includes("429") || err?.message?.includes("RESOURCE_EXHAUSTED")) {
-      geminiFaceCooldownUntil = Date.now() + 6e4;
-    }
-    getLogger().error(err, { module: "ocr", action: "gemini-face-extraction" });
-    return null;
-  }
-}
-async function detectCedulaBounds(buffer) {
-  try {
-    const { data, info } = await sharp3__default.default(buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
-    const rowBrightness = [];
-    for (let y = 0; y < info.height; y++) {
-      let darkPixels = 0;
-      for (let x = 0; x < info.width; x++) {
-        const brightness = data[y * info.width + x];
-        if (brightness < 200) darkPixels++;
-      }
-      rowBrightness.push(darkPixels / info.width);
-    }
-    let topRow = 0;
-    let bottomRow = info.height - 1;
-    const threshold = 0.05;
-    for (let y = 0; y < info.height; y++) {
-      if (rowBrightness[y] > threshold) {
-        topRow = y;
-        break;
-      }
-    }
-    for (let y = info.height - 1; y >= 0; y--) {
-      if (rowBrightness[y] > threshold) {
-        bottomRow = y;
-        break;
-      }
-    }
-    const colBrightness = [];
-    for (let x = 0; x < info.width; x++) {
-      let darkPixels = 0;
-      for (let y = 0; y < info.height; y++) {
-        const brightness = data[y * info.width + x];
-        if (brightness < 200) darkPixels++;
-      }
-      colBrightness.push(darkPixels / info.height);
-    }
-    let leftCol = 0;
-    let rightCol = info.width - 1;
-    for (let x = 0; x < info.width; x++) {
-      if (colBrightness[x] > threshold) {
-        leftCol = x;
-        break;
-      }
-    }
-    for (let x = info.width - 1; x >= 0; x--) {
-      if (colBrightness[x] > threshold) {
-        rightCol = x;
-        break;
-      }
-    }
-    const detectedWidth = rightCol - leftCol;
-    const detectedHeight = bottomRow - topRow;
-    const originalArea = info.width * info.height;
-    const detectedArea = detectedWidth * detectedHeight;
-    if (detectedArea < originalArea * 0.85 && detectedWidth > 100 && detectedHeight > 50) {
-      const padding = 10;
-      return {
-        left: Math.max(0, leftCol - padding),
-        top: Math.max(0, topRow - padding),
-        width: Math.min(detectedWidth + padding * 2, info.width - leftCol + padding),
-        height: Math.min(detectedHeight + padding * 2, info.height - topRow + padding)
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 async function extractPdfPageAsImage(pdfBuffer, pageNumber) {
   try {
     const arrayBuffer = pdfBuffer.buffer.slice(
@@ -1818,80 +1589,6 @@ async function extractPdfPageAsImage(pdfBuffer, pageNumber) {
       return Buffer.from(pages[0].content);
     }
     return null;
-  } catch {
-    return null;
-  }
-}
-async function cropToFrontCard(imageBuffer) {
-  try {
-    const bounds = await detectCedulaBounds(imageBuffer);
-    let workBuffer = imageBuffer;
-    let w, h;
-    if (bounds) {
-      workBuffer = await sharp3__default.default(imageBuffer).extract(bounds).toBuffer();
-      w = bounds.width;
-      h = bounds.height;
-    } else {
-      const meta = await sharp3__default.default(imageBuffer).metadata();
-      if (!meta.width || !meta.height) return imageBuffer;
-      w = meta.width;
-      h = meta.height;
-    }
-    if (h / w > ASPECT_RATIO_THRESHOLD) {
-      const halfH = Math.round(h / 2);
-      workBuffer = await sharp3__default.default(workBuffer).extract({ left: 0, top: 0, width: w, height: halfH }).toBuffer();
-      const frontBounds = await detectCedulaBounds(workBuffer);
-      if (frontBounds) {
-        workBuffer = await sharp3__default.default(workBuffer).extract(frontBounds).toBuffer();
-      }
-    }
-    return workBuffer;
-  } catch {
-    return imageBuffer;
-  }
-}
-async function cropPhotoFromImage(buffer, bbox) {
-  try {
-    const cedulaBounds = await detectCedulaBounds(buffer);
-    let workingBuffer = buffer;
-    let workingWidth;
-    let workingHeight;
-    if (cedulaBounds) {
-      workingBuffer = await sharp3__default.default(buffer).extract(cedulaBounds).toBuffer();
-      workingWidth = cedulaBounds.width;
-      workingHeight = cedulaBounds.height;
-    } else {
-      const metadata = await sharp3__default.default(buffer).metadata();
-      if (!metadata.width || !metadata.height) return null;
-      workingWidth = metadata.width;
-      workingHeight = metadata.height;
-    }
-    const aspectRatio = workingHeight / workingWidth;
-    if (aspectRatio > ASPECT_RATIO_THRESHOLD) {
-      const halfHeight = Math.round(workingHeight / 2);
-      workingBuffer = await sharp3__default.default(workingBuffer).extract({ left: 0, top: 0, width: workingWidth, height: halfHeight }).toBuffer();
-      workingHeight = halfHeight;
-      const frontBounds = await detectCedulaBounds(workingBuffer);
-      if (frontBounds) {
-        workingBuffer = await sharp3__default.default(workingBuffer).extract(frontBounds).toBuffer();
-        workingWidth = frontBounds.width;
-        workingHeight = frontBounds.height;
-      }
-    }
-    const left = Math.round(bbox.x / 100 * workingWidth);
-    const top = Math.round(bbox.y / 100 * workingHeight);
-    const width = Math.round(bbox.width / 100 * workingWidth);
-    const height = Math.round(bbox.height / 100 * workingHeight);
-    const safeLeft = Math.max(0, Math.min(left, workingWidth - 1));
-    const safeTop = Math.max(0, Math.min(top, workingHeight - 1));
-    const safeWidth = Math.min(width, workingWidth - safeLeft);
-    const safeHeight = Math.min(height, workingHeight - safeTop);
-    if (safeWidth <= 0 || safeHeight <= 0) return null;
-    const croppedBuffer = await sharp3__default.default(workingBuffer).extract({ left: safeLeft, top: safeTop, width: safeWidth, height: safeHeight }).resize(256, 256, { fit: "cover" }).jpeg({ quality: 92 }).toBuffer();
-    if (croppedBuffer.length < 5e3) {
-      return null;
-    }
-    return croppedBuffer.toString("base64");
   } catch {
     return null;
   }
@@ -1960,20 +1657,9 @@ async function detectCedulaSide(buffer, mimetype, model = "gemini") {
         imageBuffer = await extractPdfPageAsImage(buffer, 1);
       }
       if (imageBuffer) {
-        const cardCrop = await cropCardWithGemini(imageBuffer);
-        const cardImage = cardCrop || await cropToFrontCard(imageBuffer);
-        let foto_base64 = await extractFaceWithGemini(cardImage);
-        if (!foto_base64) {
-          foto_base64 = await detectAndCropFace(cardImage);
-        }
-        if (!foto_base64) {
-          const aiBbox = data.foto_bbox;
-          const hasBbox = aiBbox && typeof aiBbox.x === "number" && typeof aiBbox.y === "number" && typeof aiBbox.width === "number" && typeof aiBbox.height === "number";
-          const bbox = hasBbox ? aiBbox : CEDULA_PHOTO_BBOX;
-          foto_base64 = await cropPhotoFromImage(cardImage, bbox);
-        }
-        if (foto_base64) {
-          data.foto_base64 = foto_base64;
+        const result = await extractFace(imageBuffer);
+        if (result) {
+          data.foto_base64 = result.face;
         }
       }
       delete data.foto_bbox;
@@ -2130,7 +1816,7 @@ ${cedulaBbox}
   const text = await model2vision(model, mimetype, base64, prompt);
   return parseRawDocs(text);
 }
-async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId) {
+async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, options) {
   const isImage = mimetype.startsWith("image/");
   const isPDF = mimetype === "application/pdf";
   if (!isImage && !isPDF) throw new Error("Images and PDFs only");
@@ -2293,9 +1979,10 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId) {
       }
     }
   }
+  const skipFace = options?.skipFace === true;
   const documents = await Promise.all(allRawDocs.map(async (d) => {
     const { id, data, docdate, start, end, partId } = normalizeDoc(d);
-    if (id === "cedula-identidad" && partId === "front") {
+    if (id === "cedula-identidad" && partId === "front" && !skipFace) {
       let imageBuffer = null;
       if (isImage) {
         imageBuffer = buffer;
@@ -2303,20 +1990,9 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId) {
         imageBuffer = await extractPdfPageAsImage(buffer, start);
       }
       if (imageBuffer) {
-        const cardCrop = await cropCardWithGemini(imageBuffer);
-        const cardImage = cardCrop || await cropToFrontCard(imageBuffer);
-        let foto_base64 = await extractFaceWithGemini(cardImage);
-        if (!foto_base64) {
-          foto_base64 = await detectAndCropFace(cardImage);
-        }
-        if (!foto_base64) {
-          const aiBbox = data.foto_bbox;
-          const hasBbox = aiBbox && typeof aiBbox.x === "number" && typeof aiBbox.y === "number" && typeof aiBbox.width === "number" && typeof aiBbox.height === "number";
-          const bbox = hasBbox ? aiBbox : CEDULA_PHOTO_BBOX;
-          foto_base64 = await cropPhotoFromImage(cardImage, bbox);
-        }
-        if (foto_base64) {
-          data.foto_base64 = foto_base64;
+        const result = await extractFace(imageBuffer);
+        if (result) {
+          data.foto_base64 = result.face;
         }
       }
       delete data.foto_bbox;
@@ -2349,13 +2025,11 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId) {
   }
   return { documents };
 }
-var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, geminiClient3, getGemini3, geminiFaceCooldownUntil, ASPECT_RATIO_THRESHOLD, CEDULA_PHOTO_BBOX, toAiModel;
+var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, toAiModel;
 var init_ocr = __esm({
   "src/ocr.ts"() {
     init_ai();
     init_doctypes2();
-    init_config();
-    init_facedetect();
     init_faceextract();
     PROMPT_TEMPLATE_VERSION = "v1";
     pdfToPngModule = null;
@@ -2365,17 +2039,6 @@ var init_ocr = __esm({
       }
       return pdfToPngModule.pdfToPng;
     };
-    geminiClient3 = null;
-    getGemini3 = async () => {
-      if (!geminiClient3) {
-        const { GoogleGenAI } = await import('@google/genai');
-        geminiClient3 = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-      }
-      return geminiClient3;
-    };
-    geminiFaceCooldownUntil = 0;
-    ASPECT_RATIO_THRESHOLD = 1.2;
-    CEDULA_PHOTO_BBOX = { x: 2, y: 5, width: 30, height: 55 };
     toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
   }
 });
@@ -2386,7 +2049,7 @@ init_ocr();
 
 // src/cedula.ts
 init_ocr();
-var ASPECT_RATIO_THRESHOLD2 = 1.2;
+var ASPECT_RATIO_THRESHOLD = 1.2;
 function findBestSplit(data, info, isGapRow, isContentRow) {
   const MIN_GAP_ROWS = Math.max(10, Math.round(info.height * 0.02));
   const gaps = [];
@@ -2480,7 +2143,7 @@ function findBestSplit(data, info, isGapRow, isContentRow) {
   };
 }
 async function findCardRegions(imageBuffer) {
-  const { data, info } = await sharp3__default.default(imageBuffer).greyscale().raw().toBuffer({ resolveWithObject: true });
+  const { data, info } = await sharp2__default.default(imageBuffer).greyscale().raw().toBuffer({ resolveWithObject: true });
   const rowDarkness = [];
   const rowVariance = [];
   for (let y = 0; y < info.height; y++) {
@@ -2518,23 +2181,23 @@ async function findCardRegions(imageBuffer) {
   );
 }
 async function detectAndSplitCompositeCedula(imageBuffer, mimetype, model = "gemini") {
-  const metadata = await sharp3__default.default(imageBuffer).metadata();
+  const metadata = await sharp2__default.default(imageBuffer).metadata();
   const imgWidth = metadata.width || 0;
   const imgHeight = metadata.height || 0;
   const aspectRatio = imgHeight / (imgWidth || 1);
-  if (!(aspectRatio > ASPECT_RATIO_THRESHOLD2 && imgWidth > 0 && imgHeight > 0)) {
+  if (!(aspectRatio > ASPECT_RATIO_THRESHOLD && imgWidth > 0 && imgHeight > 0)) {
     return null;
   }
   const regions = await findCardRegions(imageBuffer).catch(() => null);
   let frontBuf;
   let backBuf;
   if (regions) {
-    frontBuf = await sharp3__default.default(imageBuffer).extract(regions.front).toBuffer();
-    backBuf = await sharp3__default.default(imageBuffer).extract(regions.back).toBuffer();
+    frontBuf = await sharp2__default.default(imageBuffer).extract(regions.front).toBuffer();
+    backBuf = await sharp2__default.default(imageBuffer).extract(regions.back).toBuffer();
   } else {
     const halfHeight = Math.round(imgHeight / 2);
-    frontBuf = await sharp3__default.default(imageBuffer).extract({ left: 0, top: 0, width: imgWidth, height: halfHeight }).toBuffer();
-    backBuf = await sharp3__default.default(imageBuffer).extract({ left: 0, top: halfHeight, width: imgWidth, height: imgHeight - halfHeight }).toBuffer();
+    frontBuf = await sharp2__default.default(imageBuffer).extract({ left: 0, top: 0, width: imgWidth, height: halfHeight }).toBuffer();
+    backBuf = await sharp2__default.default(imageBuffer).extract({ left: 0, top: halfHeight, width: imgWidth, height: imgHeight - halfHeight }).toBuffer();
   }
   const frontOcr = await Doc2Fields(frontBuf, mimetype, model);
   const frontDoc = frontOcr?.documents?.[0];
@@ -2570,25 +2233,26 @@ async function detectAndSplitCompositeCedula(imageBuffer, mimetype, model = "gem
 // src/cedulasplit.ts
 init_ai();
 init_ocr();
+init_faceextract();
 init_config();
 var toAiModel2 = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
-var BBOX_PROMPT = `This image may contain both sides of a Chilean ID card (c\xE9dula de identidad).
+var BBOX_PROMPT = `You are looking at a photograph or scan of a Chilean ID card (c\xE9dula de identidad). The image likely contains BOTH sides of the card \u2014 front and back \u2014 in a single image.
 
-The FRONT side has: a passport-style photo on the left, the person's name, RUT number, birth date, nationality, and issue/expiry dates.
-The BACK side has: a QR code, fingerprint, MRZ (machine-readable zone), profession, and birthplace.
+How to identify each side:
+- FRONT: Has a passport-style PHOTO of a person on the left side, plus text fields: name (APELLIDOS/NOMBRES), RUT number, birth date, nationality, sex, issue/expiry dates, and a signature. The header reads "C\xC9DULA DE IDENTIDAD" and "REP\xDABLICA DE CHILE".
+- BACK: Has a QR code (top-left), a fingerprint (right side), MRZ machine-readable lines at the bottom (starts with INCHL...), and text fields: birthplace (Naci\xF3 en), profession (Profesi\xF3n).
 
-If this image contains BOTH the front and back sides (stacked vertically, side by side, or in any arrangement), return their locations as percentage coordinates (0\u2013100) of the full image dimensions.
+Common layouts: cards stacked vertically (front on top, back below), side by side, or at slight angles. There is usually a visible gap or background between the two cards.
 
-Return JSON:
+Return the bounding box of EACH side as percentage coordinates (0\u2013100) of the full image:
 {"front": {"x": N, "y": N, "width": N, "height": N}, "back": {"x": N, "y": N, "width": N, "height": N}}
 
-Where:
-- "x" = percentage from left edge of image to left edge of card
-- "y" = percentage from top edge of image to top edge of card
-- "width" = card width as percentage of image width
-- "height" = card height as percentage of image height
+Where x/y is the top-left corner of the card as a percentage of image width/height, and width/height is the card's size as a percentage of image dimensions.
 
-If this image does NOT contain both sides (only one card, or not a c\xE9dula at all), return:
+Example for vertically stacked cards:
+{"front": {"x": 2, "y": 1, "width": 96, "height": 46}, "back": {"x": 2, "y": 52, "width": 96, "height": 46}}
+
+If you can only see ONE side of the card, return:
 {"front": null, "back": null}
 
 Return ONLY valid JSON.`;
@@ -2604,7 +2268,7 @@ async function findCardRegionsWithAI(imageBuffer, mimetype, model) {
   if (!isValidBox(parsed.front) || !isValidBox(parsed.back)) return null;
   return { front: parsed.front, back: parsed.back };
 }
-async function cropRegion2(buffer, bbox, imgW, imgH) {
+async function cropRegion(buffer, bbox, imgW, imgH) {
   const PAD = 2;
   const px = Math.max(0, bbox.x - PAD);
   const py = Math.max(0, bbox.y - PAD);
@@ -2615,10 +2279,10 @@ async function cropRegion2(buffer, bbox, imgW, imgH) {
   const width = Math.min(Math.round(pw / 100 * imgW), imgW - left);
   const height = Math.min(Math.round(ph / 100 * imgH), imgH - top);
   if (width <= 10 || height <= 10) return null;
-  return sharp3__default.default(buffer).extract({ left, top, width, height }).toBuffer();
+  return sharp2__default.default(buffer).extract({ left, top, width, height }).toBuffer();
 }
 async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "gemini") {
-  const metadata = await sharp3__default.default(imageBuffer).metadata();
+  const metadata = await sharp2__default.default(imageBuffer).metadata();
   const imgW = metadata.width || 0;
   const imgH = metadata.height || 0;
   if (!imgW || !imgH) return null;
@@ -2631,12 +2295,25 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
     return null;
   }
   if (!regions) return null;
-  const frontBuf = await cropRegion2(imageBuffer, regions.front, imgW, imgH);
-  const backBuf = await cropRegion2(imageBuffer, regions.back, imgW, imgH);
+  let frontBuf = await cropRegion(imageBuffer, regions.front, imgW, imgH);
+  let backBuf = await cropRegion(imageBuffer, regions.back, imgW, imgH);
   if (!frontBuf || !backBuf) return null;
-  const frontOcr = await Doc2Fields(frontBuf, mimetype, model);
+  const trimOpts = { background: "#FFFFFF", threshold: 80 };
+  try {
+    frontBuf = await sharp2__default.default(frontBuf).trim(trimOpts).toBuffer();
+  } catch {
+  }
+  try {
+    backBuf = await sharp2__default.default(backBuf).trim(trimOpts).toBuffer();
+  } catch {
+  }
+  const frontOcr = await Doc2Fields(frontBuf, mimetype, model, void 0, { skipFace: true });
   const frontDoc = frontOcr?.documents?.[0];
   if (frontDoc?.doc_type_id !== "cedula-identidad") return null;
+  const frontData = frontDoc.data || {};
+  delete frontData.foto_bbox;
+  const faceResult = await extractFace(frontBuf);
+  if (faceResult) frontData.foto_base64 = faceResult.face;
   const backOcr = await Doc2Fields(backBuf, mimetype, model, "cedula-identidad");
   const backDoc = backOcr?.documents?.[0];
   const rawBackData = backDoc?.data || {};
@@ -2648,7 +2325,7 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
       {
         partId: "front",
         buffer: frontBuf,
-        aiFields: JSON.stringify(frontDoc.data || {}),
+        aiFields: JSON.stringify(frontData),
         aiDate: frontDoc.docdate ? /* @__PURE__ */ new Date(`${frontDoc.docdate}T12:00:00`) : null,
         docdate: frontDoc.docdate || null
       },
@@ -2662,6 +2339,9 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
     ]
   };
 }
+
+// src/index.ts
+init_faceextract();
 
 // src/utils.ts
 init_config();
@@ -2729,7 +2409,7 @@ var THUMB_WIDTH = 200;
 var THUMB_QUALITY = 65;
 async function generateThumbnailFromImage(buffer) {
   try {
-    return await sharp3__default.default(buffer).resize(THUMB_WIDTH, null, { withoutEnlargement: true }).jpeg({ quality: THUMB_QUALITY, mozjpeg: true }).toBuffer();
+    return await sharp2__default.default(buffer).resize(THUMB_WIDTH, null, { withoutEnlargement: true }).jpeg({ quality: THUMB_QUALITY, mozjpeg: true }).toBuffer();
   } catch {
     return null;
   }
@@ -2751,6 +2431,7 @@ exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
 exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;
 exports.detectCedulaSide = detectCedulaSide;
+exports.extractFace = extractFace;
 exports.extractPdfPageAsImage = extractPdfPageAsImage;
 exports.generateThumbnailFromImage = generateThumbnailFromImage;
 exports.generateThumbnailFromPdf = generateThumbnailFromPdf;

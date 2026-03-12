@@ -25,7 +25,7 @@ declare function configure(options: {
  * Pass 2 — Extract: per-type field schemas, parallel across types
  *
  * ## Face Photo Extraction (Cédula)
- * 3-tier fallback: Gemini bbox → smartcrop → fixed bbox
+ * AWS Rekognition via extractFace() — single call, picks largest face.
  */
 
 /**
@@ -50,7 +50,9 @@ declare function detectCedulaSide(buffer: Buffer, mimetype: string, model?: Mode
     confidence: number;
     data?: object;
 }>;
-declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string): Promise<ExtractionResult>;
+declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
+    skipFace?: boolean;
+}): Promise<ExtractionResult>;
 
 /**
  * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
@@ -125,6 +127,49 @@ declare function detectAndSplitCompositeCedula(imageBuffer: Buffer, mimetype: st
 declare function detectAndSplitCompositeCedulaV3(imageBuffer: Buffer, mimetype: string, model?: ModelArg): Promise<CompositeCedulaResult | null>;
 
 /**
+ * V4 Face/Avatar Extraction — AWS Rekognition
+ *
+ * Extracts a face from ANY image using AWS Rekognition DetectFaces.
+ * Purpose-built ML face detection — not an LLM guessing coordinates.
+ * Returns precise bounding boxes with confidence scores.
+ * Picks the LARGEST face → always the passport photo, never the ghost.
+ *
+ * Pure function: buffer in, base64 face out. No DB/S3 writes.
+ * 1 Rekognition API call (~$0.001/image).
+ */
+interface BBox {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+interface FaceExtractionResult {
+    /** Base64-encoded 256×256 JPEG of the face */
+    face: string;
+    /** Bounding box as percentage coordinates (0–100) */
+    bbox: BBox;
+    /** Rekognition confidence score (0–100) */
+    confidence: number;
+    /** Number of faces detected in the image */
+    facesDetected: number;
+}
+interface ExtractFaceOptions {
+    /** AWS region (default: us-east-1) */
+    region?: string;
+    /** AWS credentials — if omitted, uses env/default chain */
+    credentials?: {
+        accessKeyId: string;
+        secretAccessKey: string;
+    };
+}
+/**
+ * Extract a face/avatar from any image using AWS Rekognition.
+ *
+ * 1 API call to detect all faces, picks the largest, crops + resizes to 256×256.
+ */
+declare function extractFace(imageBuffer: Buffer, _mimetype?: string, _model?: string, opts?: ExtractFaceOptions): Promise<FaceExtractionResult | null>;
+
+/**
  * Merge front + back cedula files into a single personal data object.
  * Front: rut, nombres, apellidos, fecha_nacimiento, nacionalidad, foto_base64
  * Back: profesion, lugar_nacimiento
@@ -136,4 +181,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, type DocProcessorLogger, ExtractionResult, MergedCedula, ModelArg, buildCacheKey, configure, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, type DocProcessorLogger, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, configure, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };

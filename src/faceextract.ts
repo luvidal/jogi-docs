@@ -1,134 +1,145 @@
 /**
- * V2 Card Detection — Gemini Bounding Box (Front Only)
+ * V4 Face/Avatar Extraction — AWS Rekognition
  *
- * Uses Gemini vision to find and crop the FRONT card from an image.
- * Returns cropped card buffer for the caller to pass to face extraction.
+ * Extracts a face from ANY image using AWS Rekognition DetectFaces.
+ * Purpose-built ML face detection — not an LLM guessing coordinates.
+ * Returns precise bounding boxes with confidence scores.
+ * Picks the LARGEST face → always the passport photo, never the ghost.
  *
- * This was the first AI-based card detection approach, proving that
- * vision models reliably locate cards regardless of background, angle,
- * or lighting. However it only finds the front card (for face extraction).
- *
- * Extended by: cedulasplit.ts (V3) — same AI bbox approach but finds
- * BOTH front and back cards for composite splitting.
- * See also: cedula.ts (V1, pixel heuristics — superseded).
+ * Pure function: buffer in, base64 face out. No DB/S3 writes.
+ * 1 Rekognition API call (~$0.001/image).
  */
 
 import sharp from 'sharp'
+import { RekognitionClient, DetectFacesCommand } from '@aws-sdk/client-rekognition'
 import { getLogger } from './config'
 
-// Lazy-loaded Gemini client
-let geminiClient: any = null
-const getGemini = async () => {
-    if (!geminiClient) {
-        const { GoogleGenAI } = await import('@google/genai')
-        geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' })
-    }
-    return geminiClient
-}
-
-// Rate-limit cooldown (independent timer from ocr.ts extractFaceWithGemini)
-let cooldownUntil = 0
-
 interface BBox {
-    x: number
-    y: number
-    width: number
-    height: number
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
-export async function cropCardWithGemini(imageBuffer: Buffer): Promise<Buffer | null> {
-    if (!process.env.GEMINI_API_KEY) return null
-    if (Date.now() < cooldownUntil) return null
-
-    try {
-        const metadata = await sharp(imageBuffer).metadata()
-        if (!metadata.width || !metadata.height) return null
-
-        const cardBbox = await findCard(imageBuffer)
-        if (!cardBbox) return null
-
-        const cardBuffer = await cropRegion(imageBuffer, cardBbox, metadata.width, metadata.height)
-        return cardBuffer
-    } catch (err: any) {
-        if (err?.status === 429 || err?.httpErrorCode === 429 || err?.message?.includes('429') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
-            cooldownUntil = Date.now() + 60_000
-        }
-        getLogger().error(err, { module: 'face-extract-v2', action: 'cropCard' })
-        return null
-    }
+export interface FaceExtractionResult {
+  /** Base64-encoded 256×256 JPEG of the face */
+  face: string
+  /** Bounding box as percentage coordinates (0–100) */
+  bbox: BBox
+  /** Rekognition confidence score (0–100) */
+  confidence: number
+  /** Number of faces detected in the image */
+  facesDetected: number
 }
 
-async function findCard(imageBuffer: Buffer): Promise<BBox | null> {
-    const base64 = imageBuffer.toString('base64')
-    const gemini = await getGemini()
+export interface ExtractFaceOptions {
+  /** AWS region (default: us-east-1) */
+  region?: string
+  /** AWS credentials — if omitted, uses env/default chain */
+  credentials?: {
+    accessKeyId: string
+    secretAccessKey: string
+  }
+}
 
-    const prompt = `Find the FRONT side of a Chilean ID card (cédula de identidad) in this image.
+let _client: RekognitionClient | null = null
 
-The FRONT side has a passport-style photo on the left. The BACK side has text only, no photo.
+function getClient(opts?: ExtractFaceOptions): RekognitionClient {
+  if (_client) return _client
+  _client = new RekognitionClient({
+    region: opts?.region || process.env.AWS_REGION || 'us-east-1',
+    ...(opts?.credentials ? { credentials: opts.credentials } : {}),
+  })
+  return _client
+}
 
-If the image contains both front and back (composite scan), locate ONLY the front side.
-If only one card is visible, determine if it's the front (has photo) or back (no photo).
+/**
+ * Extract a face/avatar from any image using AWS Rekognition.
+ *
+ * 1 API call to detect all faces, picks the largest, crops + resizes to 256×256.
+ */
+export async function extractFace(
+  imageBuffer: Buffer,
+  _mimetype?: string,
+  _model?: string,
+  opts?: ExtractFaceOptions,
+): Promise<FaceExtractionResult | null> {
+  const log = getLogger()
 
-Return JSON with the front card's location as PERCENTAGES (0-100) of the FULL IMAGE:
+  const metadata = await sharp(imageBuffer).metadata()
+  const imgW = metadata.width || 0
+  const imgH = metadata.height || 0
+  if (!imgW || !imgH) return null
 
-{"card": {"x": 5, "y": 10, "width": 90, "height": 40}}
-
-- "x" = percentage from LEFT edge of image to left edge of card
-- "y" = percentage from TOP edge of image to top edge of card
-- "width" = card width as percentage of image width
-- "height" = card height as percentage of image height
-- If no front side cédula is visible, return {"card": null}
-- Return ONLY valid JSON, no markdown.`
-
-    const result = await gemini.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: {
-            parts: [
-                { text: prompt },
-                { inlineData: { mimeType: 'image/jpeg', data: base64 } },
-            ],
-        },
+  // Step 1: Detect faces with Rekognition
+  const client = getClient(opts)
+  let faces: { bbox: BBox; confidence: number; area: number }[]
+  try {
+    const cmd = new DetectFacesCommand({
+      Image: { Bytes: imageBuffer },
+      Attributes: ['DEFAULT'],
     })
+    const res = await client.send(cmd)
+    const details = res.FaceDetails || []
 
-    const text = result.text || ''
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return null
+    if (details.length === 0) return null
 
-    const parsed = JSON.parse(jsonMatch[0])
-    if (!parsed.card) return null
+    // Convert Rekognition BBox (0-1 fractions) to our format (0-100 percentages)
+    faces = details.map(d => {
+      const bb = d.BoundingBox!
+      const x = (bb.Left || 0) * 100
+      const y = (bb.Top || 0) * 100
+      const width = (bb.Width || 0) * 100
+      const height = (bb.Height || 0) * 100
+      return {
+        bbox: { x, y, width, height },
+        confidence: d.Confidence || 0,
+        area: width * height,
+      }
+    })
+  } catch (err) {
+    log.error(err, { module: 'face-extract-v4', action: 'rekognition-detect' })
+    return null
+  }
 
-    const c = parsed.card
-    if (typeof c.x !== 'number' || typeof c.y !== 'number' ||
-        typeof c.width !== 'number' || typeof c.height !== 'number') return null
+  // Step 2: Pick the largest face
+  faces.sort((a, b) => b.area - a.area)
+  const best = faces[0]
 
-    return c as BBox
-}
+  // Step 3: Crop with padding for natural avatar framing
+  const PAD = 5
+  const px = Math.max(0, best.bbox.x - PAD)
+  const py = Math.max(0, best.bbox.y - PAD)
+  const pw = Math.min(best.bbox.width + PAD * 2, 100 - px)
+  const ph = Math.min(best.bbox.height + PAD * 2, 100 - py)
 
-async function cropRegion(
-    buffer: Buffer,
-    bbox: BBox,
-    imgW: number,
-    imgH: number
-): Promise<Buffer | null> {
-    const { x, y, width: bw, height: bh } = bbox
+  const left = Math.max(0, Math.round((px / 100) * imgW))
+  const top = Math.max(0, Math.round((py / 100) * imgH))
+  const width = Math.min(Math.round((pw / 100) * imgW), imgW - left)
+  const height = Math.min(Math.round((ph / 100) * imgH), imgH - top)
 
-    if (x < 0 || y < 0 || bw <= 0 || bh <= 0) return null
-    if (x + bw > 110 || y + bh > 110) return null
+  if (width <= 10 || height <= 10) return null
 
-    const pad = 2
-    const px = Math.max(0, x - pad)
-    const py = Math.max(0, y - pad)
-    const pw = Math.min(bw + pad * 2, 100 - px)
-    const ph = Math.min(bh + pad * 2, 100 - py)
+  // Step 4: Crop and resize to 256×256 avatar
+  let face: string
+  try {
+    const photo = await sharp(imageBuffer)
+      .extract({ left, top, width, height })
+      .resize(256, 256, { fit: 'cover' })
+      .jpeg({ quality: 92 })
+      .toBuffer()
 
-    const left = Math.max(0, Math.round((px / 100) * imgW))
-    const top = Math.max(0, Math.round((py / 100) * imgH))
-    const width = Math.min(Math.round((pw / 100) * imgW), imgW - left)
-    const height = Math.min(Math.round((ph / 100) * imgH), imgH - top)
+    if (photo.length < 5000) return null
+    face = photo.toString('base64')
+  } catch (err) {
+    log.error(err, { module: 'face-extract-v4', action: 'crop' })
+    return null
+  }
 
-    if (width <= 10 || height <= 10) return null
-
-    return sharp(buffer)
-        .extract({ left, top, width, height })
-        .toBuffer()
+  return {
+    face,
+    bbox: best.bbox,
+    confidence: best.confidence,
+    facesDetected: faces.length,
+  }
 }
