@@ -51,6 +51,31 @@ const isRateLimitError = (err: any): boolean => {
 // Delay helper
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+/**
+ * Query Gemini with Google Search grounding enabled.
+ * Used for derived fields that need real-world data (e.g., market prices).
+ * Returns raw text response — caller is responsible for parsing.
+ */
+export const queryGrounded = async (
+    prompt: string,
+    options?: { model?: string }
+): Promise<string> => {
+    if (!process.env.GEMINI_API_KEY) return ''
+    const gemini = await getGemini()
+    try {
+        const r = await gemini.models.generateContent({
+            model: options?.model ?? 'gemini-2.0-flash',
+            contents: prompt,
+            config: { tools: [{ googleSearch: {} }] }
+        })
+        return geminiText(r)
+    } catch (err: any) {
+        // On rate limit, return empty — caller treats as null
+        if (isRateLimitError(err)) return ''
+        throw err
+    }
+}
+
 export const model2vision = async (model: ModelId, mimetype: string, base64: string, prompt: string) => {
     const content = `${strict}\n${prompt}`
 

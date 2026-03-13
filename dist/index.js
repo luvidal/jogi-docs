@@ -65,7 +65,7 @@ var init_config = __esm({
 });
 
 // src/ai.ts
-var anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, model2vision;
+var anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay; exports.queryGrounded = void 0; var model2vision;
 var init_ai = __esm({
   "src/ai.ts"() {
     anthropicClient = null;
@@ -102,6 +102,21 @@ var init_ai = __esm({
       return status === 429 || status === "429" || status === 503 || status === "503" || msg.includes("429") || msg.includes("503") || msg.includes("rate") || msg.includes("resource_exhausted") || msg.includes("quota") || msg.includes("unavailable");
     };
     delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    exports.queryGrounded = async (prompt, options) => {
+      if (!process.env.GEMINI_API_KEY) return "";
+      const gemini = await getGemini();
+      try {
+        const r = await gemini.models.generateContent({
+          model: options?.model ?? "gemini-2.0-flash",
+          contents: prompt,
+          config: { tools: [{ googleSearch: {} }] }
+        });
+        return geminiText(r);
+      } catch (err) {
+        if (isRateLimitError(err)) return "";
+        throw err;
+      }
+    };
     model2vision = async (model, mimetype, base64, prompt) => {
       const content = `${strict}
 ${prompt}`;
@@ -852,6 +867,7 @@ var init_ocr = __esm({
 // src/index.ts
 init_config();
 init_ocr();
+init_ai();
 
 // src/cedula.ts
 init_ocr();

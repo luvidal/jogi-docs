@@ -7,6 +7,9 @@ export type { DocProcessorLogger } from './config'
 // OCR / Extraction
 export { Doc2Fields, detectCedulaSide, extractPdfPageAsImage, getPromptVersion, buildCacheKey } from './ocr'
 
+// Grounded AI queries (for derived fields)
+export { queryGrounded } from './ai'
+
 // Composite cedula detection
 export { detectAndSplitCompositeCedula } from './cedula'
 export { detectAndSplitCompositeCedulaV3 } from './cedulasplit'

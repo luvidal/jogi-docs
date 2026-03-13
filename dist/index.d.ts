@@ -48,6 +48,15 @@ declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, 
 }): Promise<ExtractionResult>;
 
 /**
+ * Query Gemini with Google Search grounding enabled.
+ * Used for derived fields that need real-world data (e.g., market prices).
+ * Returns raw text response — caller is responsible for parsing.
+ */
+declare const queryGrounded: (prompt: string, options?: {
+    model?: string;
+}) => Promise<string>;
+
+/**
  * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
  *
  * Detects images containing both sides of a Chilean ID card (front + back
@@ -174,4 +183,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
