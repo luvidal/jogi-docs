@@ -29,7 +29,7 @@ import type { ModelArg, ExtractionResult } from './types'
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-const PROMPT_TEMPLATE_VERSION = 'v1'
+const PROMPT_TEMPLATE_VERSION = 'v2'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -310,7 +310,7 @@ Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"do
 Si la imagen contiene AMBAS caras de una cédula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
 Para cédula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
 Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
-- "docdate": para documentos periódicos (liquidaciones, cotizaciones, boletas), usar la fecha del período. Para cédula y certificados, usar la fecha de emisión. Formato YYYY-MM-DD
+- "docdate": la fecha a la que CORRESPONDE la información, NO cuándo fue emitido o descargado. Ej: liquidación de junio 2025 emitida el 25 mayo → 2025-06-01. Resumen anual 2024 → 2024-01-01. Para certificados sin período (cédula, nacimiento, matrimonio), usar la fecha de emisión. Formato YYYY-MM-DD
 - "partId": solo para cédula-identidad
 - No inventes datos salvo campos con instrucción "ai"
 - Si no estás seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
@@ -343,12 +343,16 @@ Si partId es "front", incluye "foto_bbox" en "data" con coordenadas (0-100%) de 
         ? `Documentos detectados en páginas: ${entries.map(e => e.partId ? `${e.start}-${e.end} (${e.partId})` : `${e.start}-${e.end}`).join(', ')}.`
         : ''
 
+    const dateInstruction = doctype.dateHint
+        ? `"docdate": ${doctype.dateHint}. Formato YYYY-MM-DD`
+        : `"docdate": la fecha a la que CORRESPONDE la información, NO cuándo fue emitido. Para certificados sin período, usar fecha de emisión. Formato YYYY-MM-DD`
+
     const prompt = `Extrae los campos de "${doctype.label}" (id: "${docTypeId}").
 ${pageHint}
 Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${isPDF ? ',"start":N,"end":N' : ''}${isCedula ? ',"partId":"front|back"' : ''}}]}
 Campos: ${fields}
 ${cedulaBbox}
-- "docdate": para documentos periódicos (liquidaciones, cotizaciones, boletas), usar la fecha del período. Para cédula y certificados, usar la fecha de emisión. Formato YYYY-MM-DD
+- ${dateInstruction}
 - No inventes datos salvo campos con instrucción "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`

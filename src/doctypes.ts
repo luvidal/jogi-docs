@@ -20,6 +20,7 @@ interface RawDoctype {
   multiInstance?: boolean
   parts?: string[]
   definition: string
+  dateHint?: string
   fields: FieldDef[]
   howToObtain?: HowToObtain
 }
@@ -123,6 +124,7 @@ function getExpandedDoctypes(): DoctypesMap {
       multiInstance: dt.multiInstance,
       parts: dt.parts,
       definition: dt.definition,
+      dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),
       fields,
       fieldDefs: dt.fields,

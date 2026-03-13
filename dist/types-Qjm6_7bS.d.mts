@@ -24,6 +24,7 @@ interface Doctype {
     multiInstance?: boolean;
     parts?: string[];
     definition: string;
+    dateHint?: string;
     instructions: string;
     fields: DoctypeField;
     fieldDefs: FieldDef[];

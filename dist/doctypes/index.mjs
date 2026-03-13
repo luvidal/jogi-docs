@@ -109,6 +109,7 @@ function getExpandedDoctypes() {
       multiInstance: dt.multiInstance,
       parts: dt.parts,
       definition: dt.definition,
+      dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),
       fields,
       fieldDefs: dt.fields,

@@ -1,6 +1,6 @@
 export { D as DocProcessorLogger, c as configure } from './config-CkevkdwG.mjs';
-import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-jOhdMz9z.mjs';
-export { c as ExtractionDocument } from './types-jOhdMz9z.mjs';
+import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-Qjm6_7bS.mjs';
+export { c as ExtractionDocument } from './types-Qjm6_7bS.mjs';
 
 /**
  * OCR and Document Field Extraction

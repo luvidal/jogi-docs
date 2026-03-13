@@ -236,6 +236,7 @@ function getExpandedDoctypes() {
       multiInstance: dt.multiInstance,
       parts: dt.parts,
       definition: dt.definition,
+      dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),
       fields,
       fieldDefs: dt.fields,
@@ -581,7 +582,7 @@ Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"do
 Si la imagen contiene AMBAS caras de una c\xE9dula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
 Para c\xE9dula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
 Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
-- "docdate": para documentos peri\xF3dicos (liquidaciones, cotizaciones, boletas), usar la fecha del per\xEDodo. Para c\xE9dula y certificados, usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
+- "docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido o descargado. Ej: liquidaci\xF3n de junio 2025 emitida el 25 mayo \u2192 2025-06-01. Resumen anual 2024 \u2192 2024-01-01. Para certificados sin per\xEDodo (c\xE9dula, nacimiento, matrimonio), usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
 - "partId": solo para c\xE9dula-identidad
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
@@ -601,12 +602,13 @@ async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype,
   const cedulaBbox = isCedula ? `
 Si partId es "front", incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza completa, cuello y hombros.` : "";
   const pageHint = isPDF && entries.length > 0 ? `Documentos detectados en p\xE1ginas: ${entries.map((e) => e.partId ? `${e.start}-${e.end} (${e.partId})` : `${e.start}-${e.end}`).join(", ")}.` : "";
+  const dateInstruction = doctype.dateHint ? `"docdate": ${doctype.dateHint}. Formato YYYY-MM-DD` : `"docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido. Para certificados sin per\xEDodo, usar fecha de emisi\xF3n. Formato YYYY-MM-DD`;
   const prompt = `Extrae los campos de "${doctype.label}" (id: "${docTypeId}").
 ${pageHint}
 Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${isPDF ? ',"start":N,"end":N' : ""}${isCedula ? ',"partId":"front|back"' : ""}}]}
 Campos: ${fields}
 ${cedulaBbox}
-- "docdate": para documentos peri\xF3dicos (liquidaciones, cotizaciones, boletas), usar la fecha del per\xEDodo. Para c\xE9dula y certificados, usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
+- ${dateInstruction}
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`;
@@ -828,7 +830,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v1";
+    PROMPT_TEMPLATE_VERSION = "v2";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
