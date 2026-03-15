@@ -20,7 +20,7 @@ function getRawDoctypes() {
   const raw = getGlobal().rawDoctypes;
   if (!raw) {
     throw new Error(
-      "@avd/docprocessor: doctypes not configured. Call configure({ doctypes }) before using doctype functions."
+      "@jogi/docprocessor: doctypes not configured. Call configure({ doctypes }) before using doctype functions."
     );
   }
   return raw;

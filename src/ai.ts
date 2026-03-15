@@ -1,3 +1,10 @@
+import type { AIUsage, GroundedResult } from './types'
+
+export interface VisionResult {
+    text: string
+    usage?: AIUsage
+}
+
 type ModelId = 'GPT' | 'ANTHROPIC' | 'GEMINI'
 
 // Lazy-loaded client instances (cached after first use)
@@ -59,8 +66,8 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 export const queryGrounded = async (
     prompt: string,
     options?: { model?: string }
-): Promise<string> => {
-    if (!process.env.GEMINI_API_KEY) return ''
+): Promise<GroundedResult> => {
+    if (!process.env.GEMINI_API_KEY) return { text: '' }
     const gemini = await getGemini()
     try {
         const r = await gemini.models.generateContent({
@@ -68,15 +75,19 @@ export const queryGrounded = async (
             contents: prompt,
             config: { tools: [{ googleSearch: {} }] }
         })
-        return geminiText(r)
+        const um = r?.usageMetadata
+        return {
+            text: geminiText(r),
+            usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : undefined
+        }
     } catch (err: any) {
         // On rate limit, return empty — caller treats as null
-        if (isRateLimitError(err)) return ''
+        if (isRateLimitError(err)) return { text: '' }
         throw err
     }
 }
 
-export const model2vision = async (model: ModelId, mimetype: string, base64: string, prompt: string) => {
+export const model2vision = async (model: ModelId, mimetype: string, base64: string, prompt: string): Promise<VisionResult> => {
     const content = `${strict}\n${prompt}`
 
     if (model === 'GPT' && process.env.OPENAI_API_KEY) {
@@ -93,7 +104,11 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
             ],
         })
         const txt = r.choices?.[0]?.message?.content?.trim() || ''
-        return stripFences(txt)
+        const u = r.usage
+        return {
+            text: stripFences(txt),
+            usage: u ? { promptTokenCount: u.prompt_tokens, candidatesTokenCount: u.completion_tokens } : undefined
+        }
     }
 
     if (model === 'ANTHROPIC' && process.env.ANTHROPIC_API_KEY) {
@@ -107,7 +122,11 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
         const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, temperature: 0, messages: [{ role: 'user', content: visionContent }] })
         const block = r.content?.find((b: any) => b.type === 'text') as any
         const txt = block?.text?.trim() || ''
-        return stripFences(txt)
+        const u = r.usage
+        return {
+            text: stripFences(txt),
+            usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : undefined
+        }
     }
 
     if (model === 'GEMINI' && process.env.GEMINI_API_KEY) {
@@ -131,7 +150,11 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
                         responseMimeType: 'application/json'
                     } as any,
                 })
-                return stripFences(geminiText(r))
+                const um = r?.usageMetadata
+                return {
+                    text: stripFences(geminiText(r)),
+                    usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : undefined
+                }
             } catch (err: any) {
                 lastError = err
                 if (isRateLimitError(err) && attempt < maxRetries) {
@@ -156,12 +179,16 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
             const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, temperature: 0, messages: [{ role: 'user', content: visionContent }] })
             const block = r.content?.find((b: any) => b.type === 'text') as any
             const txt = block?.text?.trim() || ''
-            return stripFences(txt)
+            const u = r.usage
+            return {
+                text: stripFences(txt),
+                usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : undefined
+            }
         }
 
         // Re-throw the last error if no fallback available
         if (lastError) throw lastError
     }
 
-    return ''
+    return { text: '' }
 }

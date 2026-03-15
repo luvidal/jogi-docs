@@ -1,6 +1,6 @@
 export { D as DocProcessorLogger, c as configure } from './config-CkevkdwG.js';
-import { M as ModelArg, E as ExtractionResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-Qjm6_7bS.js';
-export { c as ExtractionDocument } from './types-Qjm6_7bS.js';
+import { M as ModelArg, E as ExtractionResult, G as GroundedResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-CQE0wzyE.js';
+export { A as AIUsage, c as ExtractionDocument } from './types-CQE0wzyE.js';
 
 /**
  * OCR and Document Field Extraction
@@ -54,7 +54,7 @@ declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, 
  */
 declare const queryGrounded: (prompt: string, options?: {
     model?: string;
-}) => Promise<string>;
+}) => Promise<GroundedResult>;
 
 /**
  * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
@@ -183,4 +183,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };

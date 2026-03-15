@@ -43,7 +43,7 @@ function getRawDoctypes() {
   const raw = getGlobal().rawDoctypes;
   if (!raw) {
     throw new Error(
-      "@avd/docprocessor: doctypes not configured. Call configure({ doctypes }) before using doctype functions."
+      "@jogi/docprocessor: doctypes not configured. Call configure({ doctypes }) before using doctype functions."
     );
   }
   return raw;
@@ -97,7 +97,7 @@ var init_ai = __esm({
     };
     delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     queryGrounded = async (prompt, options) => {
-      if (!process.env.GEMINI_API_KEY) return "";
+      if (!process.env.GEMINI_API_KEY) return { text: "" };
       const gemini = await getGemini();
       try {
         const r = await gemini.models.generateContent({
@@ -105,9 +105,13 @@ var init_ai = __esm({
           contents: prompt,
           config: { tools: [{ googleSearch: {} }] }
         });
-        return geminiText(r);
+        const um = r?.usageMetadata;
+        return {
+          text: geminiText(r),
+          usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : void 0
+        };
       } catch (err) {
-        if (isRateLimitError(err)) return "";
+        if (isRateLimitError(err)) return { text: "" };
         throw err;
       }
     };
@@ -128,7 +132,11 @@ ${prompt}`;
           ]
         });
         const txt = r.choices?.[0]?.message?.content?.trim() || "";
-        return stripFences(txt);
+        const u = r.usage;
+        return {
+          text: stripFences(txt),
+          usage: u ? { promptTokenCount: u.prompt_tokens, candidatesTokenCount: u.completion_tokens } : void 0
+        };
       }
       if (model === "ANTHROPIC" && process.env.ANTHROPIC_API_KEY) {
         const anthropic = await getAnthropic();
@@ -139,7 +147,11 @@ ${prompt}`;
         const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
         const block = r.content?.find((b) => b.type === "text");
         const txt = block?.text?.trim() || "";
-        return stripFences(txt);
+        const u = r.usage;
+        return {
+          text: stripFences(txt),
+          usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
+        };
       }
       if (model === "GEMINI" && process.env.GEMINI_API_KEY) {
         const gemini = await getGemini();
@@ -162,7 +174,11 @@ ${prompt}`;
                 responseMimeType: "application/json"
               }
             });
-            return stripFences(geminiText(r));
+            const um = r?.usageMetadata;
+            return {
+              text: stripFences(geminiText(r)),
+              usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : void 0
+            };
           } catch (err) {
             lastError = err;
             if (isRateLimitError(err) && attempt < maxRetries) {
@@ -182,11 +198,15 @@ ${prompt}`;
           const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
           const block = r.content?.find((b) => b.type === "text");
           const txt = block?.text?.trim() || "";
-          return stripFences(txt);
+          const u = r.usage;
+          return {
+            text: stripFences(txt),
+            usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
+          };
         }
         if (lastError) throw lastError;
       }
-      return "";
+      return { text: "" };
     };
   }
 });
@@ -380,6 +400,13 @@ __export(ocr_exports, {
   normalizeDoc: () => normalizeDoc,
   parseRawDocs: () => parseRawDocs
 });
+function addUsage(total, add) {
+  if (!add) return total;
+  return {
+    promptTokenCount: (total.promptTokenCount ?? 0) + (add.promptTokenCount ?? 0),
+    candidatesTokenCount: (total.candidatesTokenCount ?? 0) + (add.candidatesTokenCount ?? 0)
+  };
+}
 function getPromptVersion() {
   return createHash("sha256").update(JSON.stringify(getDoctypes())).update(PROMPT_TEMPLATE_VERSION).digest("hex").slice(0, 12);
 }
@@ -457,8 +484,8 @@ async function detectCedulaSide(buffer, mimetype, model = "gemini") {
     Si la imagen NO es una c\xE9dula chilena, devuelve side: null.
     `;
   const aiModel = model === "gpt5" ? "GPT" : model === "gemini" ? "GEMINI" : "ANTHROPIC";
-  let text = await model2vision(aiModel, mimetype, base64, prompt);
-  text = text.replace(/```json|```/g, "").trim();
+  const vr = await model2vision(aiModel, mimetype, base64, prompt);
+  let text = vr.text.replace(/```json|```/g, "").trim();
   try {
     const parsed = JSON.parse(text);
     const data = parsed.data || {};
@@ -562,7 +589,7 @@ function normalizeDoc(d) {
   const partId = d?.partId || d?.part_id || d?.partid || void 0;
   return { id, data, docdate, start, end, partId };
 }
-async function classifyDocument(base64, mimetype, model, isPDF, doctypes) {
+async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum) {
   const typeList = doctypes.map((dt) => `\u2022 ${dt.id}: ${dt.definition || dt.label}`).join("\n");
   const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
@@ -573,8 +600,9 @@ Si una p\xE1gina contiene AMBAS caras de una c\xE9dula (frente y reverso), devue
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 Tipos v\xE1lidos:
 ${typeList}`;
-  const text = await model2vision(model, mimetype, base64, prompt);
-  const rawDocs = parseRawDocs(text);
+  const vr = await model2vision(model, mimetype, base64, prompt);
+  if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
+  const rawDocs = parseRawDocs(vr.text);
   return rawDocs.map((d) => {
     const id = d?.id || d?.doctypeid || null;
     const start = Number.isFinite(d?.start) ? Number(d.start) : d?.start ? parseInt(d.start, 10) : void 0;
@@ -583,7 +611,7 @@ ${typeList}`;
     return { id, ...Number.isFinite(start) ? { start } : {}, ...Number.isFinite(end) ? { end } : {}, ...partId ? { partId } : {} };
   }).filter((d) => d.id);
 }
-async function classifyAndExtractImage(base64, mimetype, model, doctypes) {
+async function classifyAndExtractImage(base64, mimetype, model, doctypes, usageAccum) {
   const typeList = doctypes.map((dt) => {
     const fields = JSON.stringify(dt.fieldDefs.map((f) => {
       const entry = { key: f.key, type: f.type };
@@ -605,10 +633,11 @@ Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD"
 - Solo JSON, sin markdown
 Tipos v\xE1lidos:
 ${typeList}`;
-  const text = await model2vision(model, mimetype, base64, prompt);
-  return parseRawDocs(text);
+  const vr = await model2vision(model, mimetype, base64, prompt);
+  if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
+  return parseRawDocs(vr.text);
 }
-async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries) {
+async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries, usageAccum) {
   const fields = JSON.stringify(doctype.fieldDefs.map((f) => {
     const entry = { key: f.key, type: f.type };
     if (f.ai) entry.ai = f.ai;
@@ -628,8 +657,9 @@ ${cedulaBbox}
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`;
-  const text = await model2vision(model, mimetype, base64, prompt);
-  return parseRawDocs(text);
+  const vr = await model2vision(model, mimetype, base64, prompt);
+  if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
+  return parseRawDocs(vr.text);
 }
 async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, options) {
   const isImage = mimetype.startsWith("image/");
@@ -638,13 +668,14 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const { doctypes, mapById } = loadSchemas();
   const base64 = buffer.toString("base64");
   const aiModel = toAiModel(model);
+  const usage = {};
   let allRawDocs;
   if (forcedDoctypeId) {
     const doctype = mapById[forcedDoctypeId];
     if (!doctype) return { documents: [] };
-    allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}]);
+    allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage);
   } else if (isImage) {
-    allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes);
+    allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage);
   } else {
     const CHUNK_THRESHOLD = 8;
     const CHUNK_SIZE = 6;
@@ -664,7 +695,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
           copied.forEach((p) => out.addPage(p));
           const chunkBytes = await out.save();
           const chunkBase64 = Buffer.from(chunkBytes).toString("base64");
-          const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes);
+          const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes, usage);
           const offset = chunkStart - 1;
           for (const c of chunkClassified) {
             if (c.start != null) c.start += offset;
@@ -675,10 +706,10 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
           }
         }
       } else {
-        classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes);
+        classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage);
       }
     } catch {
-      classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes);
+      classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage);
     }
     if (classified.length === 0) {
       return { documents: [] };
@@ -756,12 +787,12 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       if (adjustedEntries.length > MAX_PER_BATCH) {
         for (let i = 0; i < adjustedEntries.length; i += MAX_PER_BATCH) {
           extractionPromises.push(
-            extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH))
+            extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage)
           );
         }
       } else {
         extractionPromises.push(
-          extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries)
+          extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage)
         );
       }
     }
@@ -838,7 +869,8 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
     }
     if (!back.docdate && front.docdate) back.docdate = front.docdate;
   }
-  return { documents };
+  const hasUsage = usage.promptTokenCount || usage.candidatesTokenCount;
+  return { documents, ...hasUsage ? { usage } : {} };
 }
 var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, toAiModel;
 var init_ocr = __esm({
@@ -1074,9 +1106,9 @@ If you can only see ONE side of the card, return:
 Return ONLY valid JSON.`;
 async function findCardRegionsWithAI(imageBuffer, mimetype, model) {
   const base64 = imageBuffer.toString("base64");
-  const text = await model2vision(model, mimetype, base64, BBOX_PROMPT);
-  if (!text) return null;
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT);
+  if (!vr.text) return null;
+  const jsonMatch = vr.text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   const parsed = JSON.parse(jsonMatch[0]);
   if (!parsed.front || !parsed.back) return null;

@@ -53,8 +53,17 @@ interface ExtractionDocument {
     end?: number;
     partId?: string;
 }
+interface AIUsage {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+}
 interface ExtractionResult {
     documents: ExtractionDocument[];
+    usage?: AIUsage;
+}
+interface GroundedResult {
+    text: string;
+    usage?: AIUsage;
 }
 interface CompositeCedulaResult {
     parts: Array<{
@@ -79,4 +88,4 @@ interface MergedCedula {
     foto_base64: string | null;
 }
 
-export type { CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, HowToObtain as H, ModelArg as M, CedulaFile as a, MergedCedula as b, ExtractionDocument as c, Doctype as d, DoctypeField as e, DoctypesMap as f, DocRequirement as g, MultiPartConfig as h };
+export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, CedulaFile as a, MergedCedula as b, ExtractionDocument as c, Doctype as d, DoctypeField as e, DoctypesMap as f, DocRequirement as g, MultiPartConfig as h };

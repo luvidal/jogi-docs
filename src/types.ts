@@ -66,8 +66,19 @@ export interface ExtractionDocument {
   partId?: string
 }
 
+export interface AIUsage {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+}
+
 export interface ExtractionResult {
   documents: ExtractionDocument[]
+  usage?: AIUsage
+}
+
+export interface GroundedResult {
+  text: string
+  usage?: AIUsage
 }
 
 // ── Cedula Types ──

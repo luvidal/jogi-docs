@@ -27,8 +27,10 @@ export { generateThumbnailFromImage, generateThumbnailFromPdf } from './thumbnai
 // Types
 export type {
   ModelArg,
+  AIUsage,
   ExtractionResult,
   ExtractionDocument,
+  GroundedResult,
   CompositeCedulaResult,
   CedulaFile,
   MergedCedula,

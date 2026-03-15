@@ -77,10 +77,10 @@ async function findCardRegionsWithAI(
   model: AiModel,
 ): Promise<CardRegions | null> {
   const base64 = imageBuffer.toString('base64')
-  const text = await model2vision(model, mimetype, base64, BBOX_PROMPT)
-  if (!text) return null
+  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT)
+  if (!vr.text) return null
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  const jsonMatch = vr.text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return null
 
   const parsed = JSON.parse(jsonMatch[0])

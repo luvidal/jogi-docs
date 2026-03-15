@@ -18,13 +18,23 @@
  */
 
 import { model2vision } from './ai'
+import type { VisionResult } from './ai'
 import { getDoctypes, getDoctypesMap } from './doctypes'
 import { getLogger } from './config'
 import { PDFDocument } from 'pdf-lib'
 import { extractFace } from './faceextract'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
-import type { ModelArg, ExtractionResult } from './types'
+import type { ModelArg, ExtractionResult, AIUsage } from './types'
+
+/** Accumulate token usage across multiple AI calls */
+function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
+    if (!add) return total
+    return {
+        promptTokenCount: (total.promptTokenCount ?? 0) + (add.promptTokenCount ?? 0),
+        candidatesTokenCount: (total.candidatesTokenCount ?? 0) + (add.candidatesTokenCount ?? 0),
+    }
+}
 
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
@@ -150,8 +160,8 @@ export async function detectCedulaSide(
     `
 
     const aiModel = model === 'gpt5' ? 'GPT' : model === 'gemini' ? 'GEMINI' : 'ANTHROPIC'
-    let text = await model2vision(aiModel as any, mimetype, base64, prompt)
-    text = text.replace(/```json|```/g, '').trim()
+    const vr = await model2vision(aiModel as any, mimetype, base64, prompt)
+    let text = vr.text.replace(/```json|```/g, '').trim()
 
     try {
         const parsed = JSON.parse(text)
@@ -263,7 +273,8 @@ export function normalizeDoc(d: any) {
 
 async function classifyDocument(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
-    doctypes: Array<{ id: string; label: string; definition: string }>
+    doctypes: Array<{ id: string; label: string; definition: string }>,
+    usageAccum?: AIUsage
 ): Promise<Array<{ id: string; start?: number; end?: number; partId?: string }>> {
     const typeList = doctypes.map(dt => `• ${dt.id}: ${dt.definition || dt.label}`).join('\n')
 
@@ -280,8 +291,9 @@ Si una página contiene AMBAS caras de una cédula (frente y reverso), devuelve 
 Tipos válidos:
 ${typeList}`
 
-    const text = await model2vision(model, mimetype, base64, prompt)
-    const rawDocs = parseRawDocs(text)
+    const vr = await model2vision(model, mimetype, base64, prompt)
+    if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
+    const rawDocs = parseRawDocs(vr.text)
 
     return rawDocs.map((d: any) => {
         const id = d?.id || d?.doctypeid || null
@@ -296,7 +308,8 @@ ${typeList}`
 
 async function classifyAndExtractImage(
     base64: string, mimetype: string, model: AiModel,
-    doctypes: Array<{ id: string; label: string; definition: string; fieldDefs: any[] }>
+    doctypes: Array<{ id: string; label: string; definition: string; fieldDefs: any[] }>,
+    usageAccum?: AIUsage
 ): Promise<any[]> {
     const typeList = doctypes.map(dt => {
         const fields = JSON.stringify(dt.fieldDefs.map((f: any) => {
@@ -320,8 +333,9 @@ Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD"
 Tipos válidos:
 ${typeList}`
 
-    const text = await model2vision(model, mimetype, base64, prompt)
-    return parseRawDocs(text)
+    const vr = await model2vision(model, mimetype, base64, prompt)
+    if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
+    return parseRawDocs(vr.text)
 }
 
 // ─── Pass 2: Extract fields ──────────────────────────────────────────────────
@@ -329,7 +343,8 @@ ${typeList}`
 async function extractFields(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
     docTypeId: string, doctype: any,
-    entries: Array<{ start?: number; end?: number; partId?: string }>
+    entries: Array<{ start?: number; end?: number; partId?: string }>,
+    usageAccum?: AIUsage
 ): Promise<any[]> {
     const fields = JSON.stringify(doctype.fieldDefs.map((f: any) => {
         const entry: any = { key: f.key, type: f.type }
@@ -359,8 +374,9 @@ ${cedulaBbox}
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`
 
-    const text = await model2vision(model, mimetype, base64, prompt)
-    return parseRawDocs(text)
+    const vr = await model2vision(model, mimetype, base64, prompt)
+    if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
+    return parseRawDocs(vr.text)
 }
 
 // ─── Main orchestrator ───────────────────────────────────────────────────────
@@ -379,15 +395,16 @@ export async function Doc2Fields(
     const { doctypes, mapById } = loadSchemas()
     const base64 = buffer.toString('base64')
     const aiModel = toAiModel(model)
+    const usage: AIUsage = {}
 
     let allRawDocs: any[]
 
     if (forcedDoctypeId) {
         const doctype = mapById[forcedDoctypeId]
         if (!doctype) return { documents: [] }
-        allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}])
+        allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage)
     } else if (isImage) {
-        allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes)
+        allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage)
     } else {
         const CHUNK_THRESHOLD = 8
         const CHUNK_SIZE = 6
@@ -410,7 +427,7 @@ export async function Doc2Fields(
                     const chunkBytes = await out.save()
                     const chunkBase64 = Buffer.from(chunkBytes).toString('base64')
 
-                    const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes)
+                    const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes, usage)
 
                     const offset = chunkStart - 1
                     for (const c of chunkClassified) {
@@ -422,10 +439,10 @@ export async function Doc2Fields(
                     }
                 }
             } else {
-                classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes)
+                classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage)
             }
         } catch {
-            classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes)
+            classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage)
         }
 
         if (classified.length === 0) {
@@ -518,12 +535,12 @@ export async function Doc2Fields(
             if (adjustedEntries.length > MAX_PER_BATCH) {
                 for (let i = 0; i < adjustedEntries.length; i += MAX_PER_BATCH) {
                     extractionPromises.push(
-                        extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH))
+                        extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage)
                     )
                 }
             } else {
                 extractionPromises.push(
-                    extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries)
+                    extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage)
                 )
             }
         }
@@ -618,5 +635,6 @@ export async function Doc2Fields(
         if (!back.docdate && front.docdate) back.docdate = front.docdate
     }
 
-    return { documents }
+    const hasUsage = usage.promptTokenCount || usage.candidatesTokenCount
+    return { documents, ...(hasUsage ? { usage } : {}) }
 }
