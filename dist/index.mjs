@@ -22,8 +22,7 @@ function getGlobal() {
         error: (err, ctx) => console.error("[docprocessor]", err, ctx),
         warn: (msg, ctx) => console.warn("[docprocessor]", msg, ctx)
       },
-      rawDoctypes: null,
-      resetDoctypesCache: null
+      rawDoctypes: null
     };
   }
   return g[GLOBAL_KEY];
@@ -33,7 +32,6 @@ function configure(options) {
   if (options.logger) state.logger = options.logger;
   if (options.doctypes) {
     state.rawDoctypes = options.doctypes;
-    state.resetDoctypesCache?.();
   }
 }
 function getLogger() {
@@ -47,9 +45,6 @@ function getRawDoctypes() {
     );
   }
   return raw;
-}
-function setResetDoctypesCache(fn) {
-  getGlobal().resetDoctypesCache = fn;
 }
 var GLOBAL_KEY;
 var init_config = __esm({
@@ -254,7 +249,6 @@ function generateInstructions(fieldDefs) {
   return parts.join(" ");
 }
 function getExpandedDoctypes() {
-  if (expandedCache) return expandedCache;
   const raw = getRawDoctypes();
   const expanded = {};
   for (const [id, dt] of Object.entries(raw)) {
@@ -279,7 +273,6 @@ function getExpandedDoctypes() {
       howToObtain: dt.howToObtain
     };
   }
-  expandedCache = expanded;
   return expanded;
 }
 function getDoctypesMap() {
@@ -292,7 +285,7 @@ function getDoctypes() {
     ...doctype
   })).sort((a, b) => a.label.localeCompare(b.label));
 }
-var TYPE_DEFAULTS, expandedCache;
+var TYPE_DEFAULTS;
 var init_doctypes = __esm({
   "src/doctypes.ts"() {
     init_config();
@@ -306,10 +299,6 @@ var init_doctypes = __esm({
       list: [],
       obj: {}
     };
-    expandedCache = null;
-    setResetDoctypesCache(() => {
-      expandedCache = null;
-    });
   }
 });
 function getClient(opts) {
@@ -590,7 +579,17 @@ function normalizeDoc(d) {
   return { id, data, docdate, start, end, partId };
 }
 async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum) {
-  const typeList = doctypes.map((dt) => `\u2022 ${dt.id}: ${dt.definition || dt.label}`).join("\n");
+  const typeList = doctypes.map((dt) => {
+    const base = `\u2022 ${dt.id}: ${dt.definition || dt.label}`;
+    if (!dt.fieldDefs?.length) return base;
+    const fields = JSON.stringify(dt.fieldDefs.map((f) => {
+      const entry = { key: f.key, type: f.type };
+      if (f.ai) entry.ai = f.ai;
+      return entry;
+    }));
+    return `${base}
+  fields: ${fields}`;
+  }).join("\n");
   const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
 Devuelve JSON: {"documents":[{"id":"tipo-id"${isPDF ? ',"start":1,"end":1' : ""},"partId":"front|back"}]}
@@ -677,33 +676,37 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   } else if (isImage) {
     allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage);
   } else {
-    const CHUNK_THRESHOLD = 8;
-    const CHUNK_SIZE = 6;
     let classified;
     let totalPages = 0;
     let pdfDoc = null;
     try {
       pdfDoc = await PDFDocument.load(buffer);
       totalPages = pdfDoc.getPageCount();
-      if (totalPages > CHUNK_THRESHOLD) {
-        classified = [];
-        for (let chunkStart = 1; chunkStart <= totalPages; chunkStart += CHUNK_SIZE) {
-          const chunkEnd = Math.min(chunkStart + CHUNK_SIZE - 1, totalPages);
-          const indices = Array.from({ length: chunkEnd - chunkStart + 1 }, (_v, i) => chunkStart + i - 1);
+      if (totalPages > 1) {
+        const perPage = [];
+        for (let p = 1; p <= totalPages; p++) {
           const out = await PDFDocument.create();
-          const copied = await out.copyPages(pdfDoc, indices);
-          copied.forEach((p) => out.addPage(p));
-          const chunkBytes = await out.save();
-          const chunkBase64 = Buffer.from(chunkBytes).toString("base64");
-          const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes, usage);
-          const offset = chunkStart - 1;
-          for (const c of chunkClassified) {
-            if (c.start != null) c.start += offset;
-            if (c.end != null) c.end += offset;
-            if (c.start != null && c.start < chunkStart) c.start = chunkStart;
-            if (c.end != null && c.end > chunkEnd) c.end = chunkEnd;
-            classified.push(c);
+          const [copied] = await out.copyPages(pdfDoc, [p - 1]);
+          out.addPage(copied);
+          const pageBase64 = Buffer.from(await out.save()).toString("base64");
+          const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage);
+          for (const c of pageClassified) {
+            perPage.push({ id: c.id, page: p, partId: c.partId });
           }
+        }
+        classified = [];
+        for (let i = 0; i < perPage.length; i++) {
+          const entry = perPage[i];
+          if (entry.partId) {
+            classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId });
+            continue;
+          }
+          let end = entry.page;
+          while (i + 1 < perPage.length && perPage[i + 1].id === entry.id && !perPage[i + 1].partId && perPage[i + 1].page === end + 1) {
+            end = perPage[i + 1].page;
+            i++;
+          }
+          classified.push({ id: entry.id, start: entry.page, end });
         }
       } else {
         classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage);
@@ -762,7 +765,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       if (!doctype) continue;
       let extractBase64 = base64;
       let adjustedEntries = entries;
-      if (pdfDoc && totalPages > CHUNK_THRESHOLD && entries.every((e) => e.start != null && e.end != null)) {
+      if (pdfDoc && totalPages > 1 && entries.every((e) => e.start != null && e.end != null)) {
         const allPages = /* @__PURE__ */ new Set();
         for (const e of entries) {
           for (let p = e.start; p <= e.end; p++) allPages.add(p);
@@ -878,7 +881,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v2";
+    PROMPT_TEMPLATE_VERSION = "v3";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {

@@ -1,7 +1,18 @@
-# @avd/docprocessor — AI Document Processing Library
+# @jogi/docs — AI Document Processing Library
 
 Standalone module for Chilean document classification, field extraction, and image processing.
 Extracted from Jogi to isolate AI/document complexity and enable independent testing.
+
+## Compact Instructions
+
+When compacting, preserve: file paths changed, errors found, decisions made, model behavior changes. Drop: full file contents already read, tool output bodies.
+
+## Communication Style
+
+- **No emotional validation** — never say "I understand your frustration". Results matter, not words.
+- **No excessive apologies** — don't apologize repeatedly. Fix the problem.
+- **Be direct** — state facts, propose solutions, execute. Skip the fluff.
+- **Ask for input** — when stuck or facing multiple approaches, ask rather than guessing.
 
 ## Tech Stack
 
@@ -44,6 +55,9 @@ src/
    - `@avd/docprocessor/multipart` — universal (safe for frontend)
 4. **Error handling** → use `getLogger()` from `config.ts`, never import Sentry
 5. **Environment** → API keys read from `process.env` (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY)
+6. **README.md maintenance** — every modification to a feature area must update its `docs/` or inline README to reflect changes
+7. **Test coverage** — after implementing a feature, check if tests exist. Update or write tests. Never leave a feature without test coverage.
+8. **Planning** — for non-trivial changes, write a plan to `docs/plans/` before implementing
 
 ## Commands
 

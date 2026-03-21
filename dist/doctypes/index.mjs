@@ -8,8 +8,7 @@ function getGlobal() {
         error: (err, ctx) => console.error("[docprocessor]", err, ctx),
         warn: (msg, ctx) => console.warn("[docprocessor]", msg, ctx)
       },
-      rawDoctypes: null,
-      resetDoctypesCache: null
+      rawDoctypes: null
     };
   }
   return g[GLOBAL_KEY];
@@ -19,7 +18,6 @@ function configure(options) {
   if (options.logger) state.logger = options.logger;
   if (options.doctypes) {
     state.rawDoctypes = options.doctypes;
-    state.resetDoctypesCache?.();
   }
 }
 function getRawDoctypes() {
@@ -30,9 +28,6 @@ function getRawDoctypes() {
     );
   }
   return raw;
-}
-function setResetDoctypesCache(fn) {
-  getGlobal().resetDoctypesCache = fn;
 }
 
 // src/doctypes.ts
@@ -87,12 +82,7 @@ function generateInstructions(fieldDefs) {
   }
   return parts.join(" ");
 }
-var expandedCache = null;
-setResetDoctypesCache(() => {
-  expandedCache = null;
-});
 function getExpandedDoctypes() {
-  if (expandedCache) return expandedCache;
   const raw = getRawDoctypes();
   const expanded = {};
   for (const [id, dt] of Object.entries(raw)) {
@@ -117,7 +107,6 @@ function getExpandedDoctypes() {
       howToObtain: dt.howToObtain
     };
   }
-  expandedCache = expanded;
   return expanded;
 }
 function getDoctypesMap() {

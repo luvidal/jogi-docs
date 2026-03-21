@@ -13,8 +13,9 @@ export { A as AIUsage, c as ExtractionDocument } from './types-CQE0wzyE.js';
  * ### Images → Single-pass (classifyAndExtractImage)
  * One API call that classifies AND extracts fields simultaneously.
  *
- * ### PDFs → Two-pass (classifyDocument → extractFields)
- * Pass 1 — Classify: doctype IDs + definitions only (~750 tokens)
+ * ### PDFs → Multi-pass (detectDocumentBoundaries → classifyDocument → extractFields)
+ * Pass 0 — Split: detect document boundaries in multi-doc PDFs (no doctype knowledge)
+ * Pass 1 — Classify: each document individually with doctype definitions + field schemas
  * Pass 2 — Extract: per-type field schemas, parallel across types
  *
  * ## Face Photo Extraction (Cédula)

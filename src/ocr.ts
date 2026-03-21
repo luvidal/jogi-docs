@@ -9,8 +9,9 @@
  * ### Images → Single-pass (classifyAndExtractImage)
  * One API call that classifies AND extracts fields simultaneously.
  *
- * ### PDFs → Two-pass (classifyDocument → extractFields)
- * Pass 1 — Classify: doctype IDs + definitions only (~750 tokens)
+ * ### PDFs → Multi-pass (detectDocumentBoundaries → classifyDocument → extractFields)
+ * Pass 0 — Split: detect document boundaries in multi-doc PDFs (no doctype knowledge)
+ * Pass 1 — Classify: each document individually with doctype definitions + field schemas
  * Pass 2 — Extract: per-type field schemas, parallel across types
  *
  * ## Face Photo Extraction (Cédula)
@@ -39,7 +40,7 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-const PROMPT_TEMPLATE_VERSION = 'v2'
+const PROMPT_TEMPLATE_VERSION = 'v3'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -269,14 +270,52 @@ export function normalizeDoc(d: any) {
     return { id, data, docdate, start, end, partId }
 }
 
+// ─── Pass 0: Detect document boundaries in multi-doc PDFs ───────────────────
+
+async function detectDocumentBoundaries(
+    base64: string, model: AiModel, totalPages: number,
+    usageAccum?: AIUsage
+): Promise<Array<{ start: number; end: number }>> {
+    const prompt = `Este PDF tiene ${totalPages} páginas y puede contener múltiples documentos combinados.
+Identifica los límites de cada documento separado dentro del PDF.
+Devuelve JSON: {"documents":[{"start":1,"end":3},{"start":4,"end":4},{"start":5,"end":8}]}
+- "start"/"end": páginas 1-indexed
+- Cada documento es un bloque continuo de páginas que pertenecen al mismo documento original
+- Busca cambios de formato, encabezados, logos, o estilos que indiquen un documento diferente
+- Si todo el PDF es un solo documento, devuelve [{"start":1,"end":${totalPages}}]
+- Solo JSON, sin markdown`
+
+    const vr = await model2vision(model, 'application/pdf', base64, prompt)
+    if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
+    const parsed = parseRawDocs(vr.text)
+
+    if (!parsed.length) return [{ start: 1, end: totalPages }]
+
+    return parsed
+        .map((d: any) => ({
+            start: Number.isFinite(d?.start) ? Number(d.start) : parseInt(d?.start, 10),
+            end: Number.isFinite(d?.end) ? Number(d.end) : parseInt(d?.end, 10),
+        }))
+        .filter((d: { start: number; end: number }) => Number.isFinite(d.start) && Number.isFinite(d.end))
+}
+
 // ─── Pass 1: Classify ────────────────────────────────────────────────────────
 
 async function classifyDocument(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
-    doctypes: Array<{ id: string; label: string; definition: string }>,
+    doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
     usageAccum?: AIUsage
 ): Promise<Array<{ id: string; start?: number; end?: number; partId?: string }>> {
-    const typeList = doctypes.map(dt => `• ${dt.id}: ${dt.definition || dt.label}`).join('\n')
+    const typeList = doctypes.map(dt => {
+        const base = `• ${dt.id}: ${dt.definition || dt.label}`
+        if (!dt.fieldDefs?.length) return base
+        const fields = JSON.stringify(dt.fieldDefs.map((f: any) => {
+            const entry: any = { key: f.key, type: f.type }
+            if (f.ai) entry.ai = f.ai
+            return entry
+        }))
+        return `${base}\n  fields: ${fields}`
+    }).join('\n')
 
     const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
@@ -406,8 +445,6 @@ export async function Doc2Fields(
     } else if (isImage) {
         allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage)
     } else {
-        const CHUNK_THRESHOLD = 8
-        const CHUNK_SIZE = 6
         let classified: Array<{ id: string; start?: number; end?: number; partId?: string }>
 
         let totalPages = 0
@@ -416,27 +453,44 @@ export async function Doc2Fields(
             pdfDoc = await PDFDocument.load(buffer)
             totalPages = pdfDoc.getPageCount()
 
-            if (totalPages > CHUNK_THRESHOLD) {
-                classified = []
-                for (let chunkStart = 1; chunkStart <= totalPages; chunkStart += CHUNK_SIZE) {
-                    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE - 1, totalPages)
-                    const indices = Array.from({ length: chunkEnd - chunkStart + 1 }, (_v, i) => chunkStart + i - 1)
+            if (totalPages > 1) {
+                // Classify each page individually, then merge adjacent pages
+                // with the same doctype into document ranges.
+                // This avoids context bias where a Maat informe comercial page
+                // gets misclassified as informe-deuda when grouped with debt pages.
+                const perPage: Array<{ id: string; page: number; partId?: string }> = []
+                for (let p = 1; p <= totalPages; p++) {
                     const out = await PDFDocument.create()
-                    const copied = await out.copyPages(pdfDoc, indices)
-                    copied.forEach(p => out.addPage(p))
-                    const chunkBytes = await out.save()
-                    const chunkBase64 = Buffer.from(chunkBytes).toString('base64')
+                    const [copied] = await out.copyPages(pdfDoc, [p - 1])
+                    out.addPage(copied)
+                    const pageBase64 = Buffer.from(await out.save()).toString('base64')
 
-                    const chunkClassified = await classifyDocument(chunkBase64, mimetype, aiModel, isPDF, doctypes, usage)
-
-                    const offset = chunkStart - 1
-                    for (const c of chunkClassified) {
-                        if (c.start != null) c.start += offset
-                        if (c.end != null) c.end += offset
-                        if (c.start != null && c.start < chunkStart) c.start = chunkStart
-                        if (c.end != null && c.end > chunkEnd) c.end = chunkEnd
-                        classified.push(c)
+                    const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage)
+                    for (const c of pageClassified) {
+                        perPage.push({ id: c.id, page: p, partId: c.partId })
                     }
+                }
+
+                // Merge adjacent pages with the same doctype into ranges
+                classified = []
+                for (let i = 0; i < perPage.length; i++) {
+                    const entry = perPage[i]
+                    // Cédula entries have partId and shouldn't be merged
+                    if (entry.partId) {
+                        classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId })
+                        continue
+                    }
+                    let end = entry.page
+                    while (
+                        i + 1 < perPage.length &&
+                        perPage[i + 1].id === entry.id &&
+                        !perPage[i + 1].partId &&
+                        perPage[i + 1].page === end + 1
+                    ) {
+                        end = perPage[i + 1].page
+                        i++
+                    }
+                    classified.push({ id: entry.id, start: entry.page, end })
                 }
             } else {
                 classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage)
@@ -506,7 +560,7 @@ export async function Doc2Fields(
             let extractBase64 = base64
             let adjustedEntries = entries
 
-            if (pdfDoc && totalPages > CHUNK_THRESHOLD && entries.every(e => e.start != null && e.end != null)) {
+            if (pdfDoc && totalPages > 1 && entries.every(e => e.start != null && e.end != null)) {
                 const allPages = new Set<number>()
                 for (const e of entries) {
                     for (let p = e.start!; p <= e.end!; p++) allPages.add(p)

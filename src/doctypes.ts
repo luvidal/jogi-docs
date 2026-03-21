@@ -3,7 +3,7 @@
  * Reads from host-provided doctypes data (injected via configure({ doctypes }))
  */
 
-import { getRawDoctypes, setResetDoctypesCache } from './config'
+import { getRawDoctypes } from './config'
 import type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement } from './types'
 
 export type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement }
@@ -98,15 +98,7 @@ function generateInstructions(fieldDefs: FieldDef[]): string {
   return parts.join(' ')
 }
 
-// Cache expanded doctypes
-let expandedCache: DoctypesMap | null = null
-
-// Register cache reset so configure() can invalidate on reconfigure
-setResetDoctypesCache(() => { expandedCache = null })
-
 function getExpandedDoctypes(): DoctypesMap {
-  if (expandedCache) return expandedCache
-
   const raw = getRawDoctypes() as Record<string, RawDoctype>
   const expanded: DoctypesMap = {}
 
@@ -133,7 +125,6 @@ function getExpandedDoctypes(): DoctypesMap {
     }
   }
 
-  expandedCache = expanded
   return expanded
 }
 

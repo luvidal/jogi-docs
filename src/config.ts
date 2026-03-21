@@ -10,7 +10,6 @@ const GLOBAL_KEY = '__avd_docprocessor__' as const
 interface DocProcessorGlobal {
   logger: DocProcessorLogger
   rawDoctypes: Record<string, unknown> | null
-  resetDoctypesCache: (() => void) | null
 }
 
 function getGlobal(): DocProcessorGlobal {
@@ -22,7 +21,6 @@ function getGlobal(): DocProcessorGlobal {
         warn: (msg: string, ctx?: Record<string, unknown>) => console.warn('[docprocessor]', msg, ctx),
       },
       rawDoctypes: null,
-      resetDoctypesCache: null,
     }
   }
   return g[GLOBAL_KEY]
@@ -33,7 +31,6 @@ export function configure(options: { logger?: DocProcessorLogger; doctypes?: Rec
   if (options.logger) state.logger = options.logger
   if (options.doctypes) {
     state.rawDoctypes = options.doctypes
-    state.resetDoctypesCache?.()
   }
 }
 
@@ -51,6 +48,3 @@ export function getRawDoctypes(): Record<string, unknown> {
   return raw
 }
 
-export function setResetDoctypesCache(fn: () => void) {
-  getGlobal().resetDoctypesCache = fn
-}
