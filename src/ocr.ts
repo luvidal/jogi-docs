@@ -40,7 +40,7 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-const PROMPT_TEMPLATE_VERSION = 'v3'
+const PROMPT_TEMPLATE_VERSION = 'v4'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -366,6 +366,7 @@ Para cédula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la
 Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
 - "docdate": la fecha a la que CORRESPONDE la información, NO cuándo fue emitido o descargado. Ej: liquidación de junio 2025 emitida el 25 mayo → 2025-06-01. Resumen anual 2024 → 2024-01-01. Para certificados sin período (cédula, nacimiento, matrimonio), usar la fecha de emisión. Formato YYYY-MM-DD
 - "partId": solo para cédula-identidad
+- Campos type:"num": devuelve número entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
 - No inventes datos salvo campos con instrucción "ai"
 - Si no estás seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 - Solo JSON, sin markdown
@@ -409,6 +410,7 @@ Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-M
 Campos: ${fields}
 ${cedulaBbox}
 - ${dateInstruction}
+- Campos type:"num": devuelve número entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
 - No inventes datos salvo campos con instrucción "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`

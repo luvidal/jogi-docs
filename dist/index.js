@@ -633,6 +633,7 @@ Para c\xE9dula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de 
 Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
 - "docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido o descargado. Ej: liquidaci\xF3n de junio 2025 emitida el 25 mayo \u2192 2025-06-01. Resumen anual 2024 \u2192 2024-01-01. Para certificados sin per\xEDodo (c\xE9dula, nacimiento, matrimonio), usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
 - "partId": solo para c\xE9dula-identidad
+- Campos type:"num": devuelve n\xFAmero entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 - Solo JSON, sin markdown
@@ -659,6 +660,7 @@ Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-M
 Campos: ${fields}
 ${cedulaBbox}
 - ${dateInstruction}
+- Campos type:"num": devuelve n\xFAmero entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`;
@@ -887,7 +889,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v3";
+    PROMPT_TEMPLATE_VERSION = "v4";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
