@@ -91,6 +91,7 @@ function getExpandedDoctypes() {
       hasFechaVencimiento: dt.fields?.some((f) => f.key === "fecha_vencimiento") ?? false,
       multiInstance: dt.multiInstance,
       parts: dt.parts,
+      contains: dt.contains,
       definition: dt.definition,
       dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),

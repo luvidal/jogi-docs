@@ -1,6 +1,6 @@
 export { c as configure } from '../config-CkevkdwG.mjs';
-import { D as DocFrequency, d as Doctype, e as DoctypeField, f as DoctypesMap, g as DocRequirement } from '../types-CQE0wzyE.mjs';
-export { F as FieldDef, H as HowToObtain } from '../types-CQE0wzyE.mjs';
+import { D as DocFrequency, d as Doctype, e as DoctypeField, f as DoctypesMap, g as DocRequirement } from '../types-B9rebU9p.mjs';
+export { F as FieldDef, H as HowToObtain } from '../types-B9rebU9p.mjs';
 
 /**
  * Document types helper library

@@ -544,6 +544,45 @@ export async function Doc2Fields(
             classified = expanded
         }
 
+        // Container document detection: if a container doctype (e.g. carpeta-tributaria)
+        // is present, ensure it spans all pages and that sub-documents are identified.
+        // If the AI classified all pages as the container, do a second-pass classification
+        // against the contained sub-doctypes to identify page ranges for each.
+        {
+            const containerIds = new Set<string>()
+            for (const c of classified) {
+                const dt = mapById[c.id]
+                if (dt?.contains?.length) containerIds.add(c.id)
+            }
+
+            for (const containerId of containerIds) {
+                const containerDt = mapById[containerId]
+                if (!containerDt?.contains?.length) continue
+                const containedIds = new Set(containerDt.contains)
+
+                // Check if any sub-documents were already identified by per-page classification
+                const hasSubDocs = classified.some(c => containedIds.has(c.id))
+
+                if (!hasSubDocs && totalPages > 1) {
+                    // All pages classified as container — second-pass classification
+                    // against contained sub-doctypes only
+                    const subDoctypes = doctypes.filter(dt => containedIds.has(dt.id))
+                    if (subDoctypes.length > 0) {
+                        const subClassified = await classifyDocument(
+                            base64, mimetype, aiModel, isPDF, subDoctypes, usage
+                        )
+                        for (const sub of subClassified) {
+                            classified.push(sub)
+                        }
+                    }
+                }
+
+                // Ensure a single container entry spans all pages
+                classified = classified.filter(c => c.id !== containerId)
+                classified.unshift({ id: containerId, start: 1, end: totalPages })
+            }
+        }
+
         // Group by doc type for Pass 2
         const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string }>>()
         for (const c of classified) {

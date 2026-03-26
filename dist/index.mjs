@@ -264,6 +264,7 @@ function getExpandedDoctypes() {
       hasFechaVencimiento: dt.fields?.some((f) => f.key === "fecha_vencimiento") ?? false,
       multiInstance: dt.multiInstance,
       parts: dt.parts,
+      contains: dt.contains,
       definition: dt.definition,
       dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),
@@ -753,6 +754,37 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         }
       }
       classified = expanded;
+    }
+    {
+      const containerIds = /* @__PURE__ */ new Set();
+      for (const c of classified) {
+        const dt = mapById[c.id];
+        if (dt?.contains?.length) containerIds.add(c.id);
+      }
+      for (const containerId of containerIds) {
+        const containerDt = mapById[containerId];
+        if (!containerDt?.contains?.length) continue;
+        const containedIds = new Set(containerDt.contains);
+        const hasSubDocs = classified.some((c) => containedIds.has(c.id));
+        if (!hasSubDocs && totalPages > 1) {
+          const subDoctypes = doctypes.filter((dt) => containedIds.has(dt.id));
+          if (subDoctypes.length > 0) {
+            const subClassified = await classifyDocument(
+              base64,
+              mimetype,
+              aiModel,
+              isPDF,
+              subDoctypes,
+              usage
+            );
+            for (const sub of subClassified) {
+              classified.push(sub);
+            }
+          }
+        }
+        classified = classified.filter((c) => c.id !== containerId);
+        classified.unshift({ id: containerId, start: 1, end: totalPages });
+      }
     }
     const byType = /* @__PURE__ */ new Map();
     for (const c of classified) {

@@ -19,6 +19,7 @@ interface RawDoctype {
   graceDays?: number
   multiInstance?: boolean
   parts?: string[]
+  contains?: string[]
   definition: string
   dateHint?: string
   fields: FieldDef[]
@@ -115,6 +116,7 @@ function getExpandedDoctypes(): DoctypesMap {
       hasFechaVencimiento: dt.fields?.some(f => f.key === 'fecha_vencimiento') ?? false,
       multiInstance: dt.multiInstance,
       parts: dt.parts,
+      contains: dt.contains,
       definition: dt.definition,
       dateHint: dt.dateHint,
       instructions: generateInstructions(dt.fields),

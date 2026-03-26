@@ -23,6 +23,7 @@ interface Doctype {
     hasFechaVencimiento: boolean;
     multiInstance?: boolean;
     parts?: string[];
+    contains?: string[];
     definition: string;
     dateHint?: string;
     instructions: string;
