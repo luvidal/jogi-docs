@@ -54,9 +54,11 @@ var init_config = __esm({
 });
 
 // src/ai.ts
-var anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, queryGrounded, model2vision;
+var toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, queryGrounded, callAnthropic, model2vision;
 var init_ai = __esm({
   "src/ai.ts"() {
+    init_config();
+    toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
     anthropicClient = null;
     openaiClient = null;
     geminiClient = null;
@@ -110,6 +112,21 @@ var init_ai = __esm({
         throw err;
       }
     };
+    callAnthropic = async (mimetype, base64, content) => {
+      const anthropic = await getAnthropic();
+      const visionContent = [
+        { type: "text", text: content },
+        mimetype === "application/pdf" ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } : { type: "image", source: { type: "base64", media_type: mimetype, data: base64 } }
+      ];
+      const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
+      const block = r.content?.find((b) => b.type === "text");
+      const txt = block?.text?.trim() || "";
+      const u = r.usage;
+      return {
+        text: stripFences(txt),
+        usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
+      };
+    };
     model2vision = async (model, mimetype, base64, prompt) => {
       const content = `${strict}
 ${prompt}`;
@@ -134,19 +151,7 @@ ${prompt}`;
         };
       }
       if (model === "ANTHROPIC" && process.env.ANTHROPIC_API_KEY) {
-        const anthropic = await getAnthropic();
-        const visionContent = [
-          { type: "text", text: content },
-          mimetype === "application/pdf" ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } : { type: "image", source: { type: "base64", media_type: mimetype, data: base64 } }
-        ];
-        const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
-        const block = r.content?.find((b) => b.type === "text");
-        const txt = block?.text?.trim() || "";
-        const u = r.usage;
-        return {
-          text: stripFences(txt),
-          usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
-        };
+        return callAnthropic(mimetype, base64, content);
       }
       if (model === "GEMINI" && process.env.GEMINI_API_KEY) {
         const gemini = await getGemini();
@@ -165,7 +170,6 @@ ${prompt}`;
               config: {
                 temperature: 0,
                 maxOutputTokens: 8192,
-                // Allow longer responses for multi-document PDFs
                 responseMimeType: "application/json"
               }
             });
@@ -184,20 +188,8 @@ ${prompt}`;
           }
         }
         if (isRateLimitError(lastError) && process.env.ANTHROPIC_API_KEY) {
-          console.warn("Gemini rate limited, falling back to Anthropic");
-          const anthropic = await getAnthropic();
-          const visionContent = [
-            { type: "text", text: content },
-            mimetype === "application/pdf" ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } : { type: "image", source: { type: "base64", media_type: mimetype, data: base64 } }
-          ];
-          const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
-          const block = r.content?.find((b) => b.type === "text");
-          const txt = block?.text?.trim() || "";
-          const u = r.usage;
-          return {
-            text: stripFences(txt),
-            usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
-          };
+          getLogger().warn("Gemini rate limited, falling back to Anthropic");
+          return callAnthropic(mimetype, base64, content);
         }
         if (lastError) throw lastError;
       }
@@ -473,9 +465,9 @@ async function detectCedulaSide(buffer, mimetype, model = "gemini") {
 
     Si la imagen NO es una c\xE9dula chilena, devuelve side: null.
     `;
-  const aiModel = model === "gpt5" ? "GPT" : model === "gemini" ? "GEMINI" : "ANTHROPIC";
+  const aiModel = toAiModel(model);
   const vr = await model2vision(aiModel, mimetype, base64, prompt);
-  let text = vr.text.replace(/```json|```/g, "").trim();
+  let text = stripFences(vr.text);
   try {
     const parsed = JSON.parse(text);
     const data = parsed.data || {};
@@ -509,7 +501,7 @@ function loadSchemas() {
   return { doctypes, mapById };
 }
 function parseRawDocs(text) {
-  const cleaned = text.replace(/```json|```/g, "").trim();
+  const cleaned = stripFences(text);
   if (!cleaned) return [];
   try {
     const parsed = JSON.parse(cleaned);
@@ -909,7 +901,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const hasUsage = usage.promptTokenCount || usage.candidatesTokenCount;
   return { documents, ...hasUsage ? { usage } : {} };
 }
-var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, toAiModel;
+var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng;
 var init_ocr = __esm({
   "src/ocr.ts"() {
     init_ai();
@@ -923,7 +915,6 @@ var init_ocr = __esm({
       }
       return pdfToPngModule.pdfToPng;
     };
-    toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
   }
 });
 
@@ -1120,7 +1111,6 @@ init_ai();
 init_ocr();
 init_faceextract();
 init_config();
-var toAiModel2 = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
 var BBOX_PROMPT = `You are looking at a photograph or scan of a Chilean ID card (c\xE9dula de identidad). The image likely contains BOTH sides of the card \u2014 front and back \u2014 in a single image.
 
 How to identify each side:
@@ -1171,7 +1161,7 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
   const imgW = metadata.width || 0;
   const imgH = metadata.height || 0;
   if (!imgW || !imgH) return null;
-  const aiModel = toAiModel2(model);
+  const aiModel = toAiModel(model);
   let regions;
   try {
     regions = await findCardRegionsWithAI(imageBuffer, mimetype, aiModel);

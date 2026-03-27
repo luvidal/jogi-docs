@@ -22,16 +22,13 @@
  */
 
 import sharp from 'sharp'
-import { model2vision } from './ai'
+import { model2vision, toAiModel } from './ai'
+import type { AiModel } from './ai'
 import { Doc2Fields } from './ocr'
 import { extractFace } from './faceextract'
 import { getLogger } from './config'
 import type { CompositeCedulaResult, ModelArg } from './types'
 
-type AiModel = 'GPT' | 'ANTHROPIC' | 'GEMINI'
-
-const toAiModel = (m: ModelArg): AiModel =>
-  m === 'gpt5' ? 'GPT' : m === 'gemini' ? 'GEMINI' : 'ANTHROPIC'
 
 /** Bounding box as percentages (0–100) of the full image */
 interface BBox {

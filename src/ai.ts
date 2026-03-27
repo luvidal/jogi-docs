@@ -1,11 +1,15 @@
-import type { AIUsage, GroundedResult } from './types'
+import type { AIUsage, GroundedResult, ModelArg } from './types'
+import { getLogger } from './config'
 
 export interface VisionResult {
     text: string
     usage?: AIUsage
 }
 
-type ModelId = 'GPT' | 'ANTHROPIC' | 'GEMINI'
+export type AiModel = 'GPT' | 'ANTHROPIC' | 'GEMINI'
+
+export const toAiModel = (m: ModelArg): AiModel =>
+    m === 'gpt5' ? 'GPT' : m === 'gemini' ? 'GEMINI' : 'ANTHROPIC'
 
 // Lazy-loaded client instances (cached after first use)
 let anthropicClient: any = null
@@ -37,7 +41,7 @@ const getGemini = async () => {
 }
 
 const strict = 'Devuelve EXCLUSIVAMENTE JSON válido, sin markdown, sin texto adicional'
-const stripFences = (txt: string) => txt.replace(/```json|```/g, '').trim()
+export const stripFences = (txt: string) => txt.replace(/```json|```/g, '').trim()
 const geminiText = (r: any) => r?.text || r?.candidates?.[0]?.content?.parts?.map?.((p: any) => p?.text || '').join?.('') || ''
 
 // Check if error is transient (rate limit or temporary provider unavailability)
@@ -87,7 +91,26 @@ export const queryGrounded = async (
     }
 }
 
-export const model2vision = async (model: ModelId, mimetype: string, base64: string, prompt: string): Promise<VisionResult> => {
+/** Call Anthropic Claude with vision content */
+const callAnthropic = async (mimetype: string, base64: string, content: string): Promise<VisionResult> => {
+    const anthropic = await getAnthropic()
+    const visionContent = [
+        { type: 'text', text: content },
+        mimetype === 'application/pdf'
+            ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+            : { type: 'image', source: { type: 'base64', media_type: mimetype as any, data: base64 } },
+    ] as any
+    const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, temperature: 0, messages: [{ role: 'user', content: visionContent }] })
+    const block = r.content?.find((b: any) => b.type === 'text') as any
+    const txt = block?.text?.trim() || ''
+    const u = r.usage
+    return {
+        text: stripFences(txt),
+        usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : undefined
+    }
+}
+
+export const model2vision = async (model: AiModel, mimetype: string, base64: string, prompt: string): Promise<VisionResult> => {
     const content = `${strict}\n${prompt}`
 
     if (model === 'GPT' && process.env.OPENAI_API_KEY) {
@@ -112,21 +135,7 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
     }
 
     if (model === 'ANTHROPIC' && process.env.ANTHROPIC_API_KEY) {
-        const anthropic = await getAnthropic()
-        const visionContent = [
-            { type: 'text', text: content },
-            mimetype === 'application/pdf'
-                ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
-                : { type: 'image', source: { type: 'base64', media_type: mimetype as any, data: base64 } },
-        ] as any
-        const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, temperature: 0, messages: [{ role: 'user', content: visionContent }] })
-        const block = r.content?.find((b: any) => b.type === 'text') as any
-        const txt = block?.text?.trim() || ''
-        const u = r.usage
-        return {
-            text: stripFences(txt),
-            usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : undefined
-        }
+        return callAnthropic(mimetype, base64, content)
     }
 
     if (model === 'GEMINI' && process.env.GEMINI_API_KEY) {
@@ -146,7 +155,7 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
                     },
                     config: {
                         temperature: 0,
-                        maxOutputTokens: 8192,  // Allow longer responses for multi-document PDFs
+                        maxOutputTokens: 8192,
                         responseMimeType: 'application/json'
                     } as any,
                 })
@@ -158,7 +167,6 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
             } catch (err: any) {
                 lastError = err
                 if (isRateLimitError(err) && attempt < maxRetries) {
-                    // Exponential backoff: 1s, 2s
                     await delay(1000 * (attempt + 1))
                     continue
                 }
@@ -168,25 +176,10 @@ export const model2vision = async (model: ModelId, mimetype: string, base64: str
 
         // Fallback to Anthropic if Gemini rate limited and Anthropic is available
         if (isRateLimitError(lastError) && process.env.ANTHROPIC_API_KEY) {
-            console.warn('Gemini rate limited, falling back to Anthropic')
-            const anthropic = await getAnthropic()
-            const visionContent = [
-                { type: 'text', text: content },
-                mimetype === 'application/pdf'
-                    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
-                    : { type: 'image', source: { type: 'base64', media_type: mimetype as any, data: base64 } },
-            ] as any
-            const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, temperature: 0, messages: [{ role: 'user', content: visionContent }] })
-            const block = r.content?.find((b: any) => b.type === 'text') as any
-            const txt = block?.text?.trim() || ''
-            const u = r.usage
-            return {
-                text: stripFences(txt),
-                usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : undefined
-            }
+            getLogger().warn('Gemini rate limited, falling back to Anthropic')
+            return callAnthropic(mimetype, base64, content)
         }
 
-        // Re-throw the last error if no fallback available
         if (lastError) throw lastError
     }
 

@@ -18,8 +18,8 @@
  * AWS Rekognition via extractFace() — single call, picks largest face.
  */
 
-import { model2vision } from './ai'
-import type { VisionResult } from './ai'
+import { model2vision, toAiModel, stripFences } from './ai'
+import type { VisionResult, AiModel } from './ai'
 import { getDoctypes, getDoctypesMap } from './doctypes'
 import { getLogger } from './config'
 import { PDFDocument } from 'pdf-lib'
@@ -160,9 +160,9 @@ export async function detectCedulaSide(
     Si la imagen NO es una cédula chilena, devuelve side: null.
     `
 
-    const aiModel = model === 'gpt5' ? 'GPT' : model === 'gemini' ? 'GEMINI' : 'ANTHROPIC'
-    const vr = await model2vision(aiModel as any, mimetype, base64, prompt)
-    let text = vr.text.replace(/```json|```/g, '').trim()
+    const aiModel = toAiModel(model)
+    const vr = await model2vision(aiModel, mimetype, base64, prompt)
+    let text = stripFences(vr.text)
 
     try {
         const parsed = JSON.parse(text)
@@ -198,11 +198,6 @@ export async function detectCedulaSide(
 
 // ─── Two-Pass Extraction ─────────────────────────────────────────────────────
 
-type AiModel = 'GPT' | 'ANTHROPIC' | 'GEMINI'
-
-const toAiModel = (m: ModelArg): AiModel =>
-    m === 'gpt5' ? 'GPT' : m === 'gemini' ? 'GEMINI' : 'ANTHROPIC'
-
 function loadSchemas() {
     const doctypes = getDoctypes()
     const mapById = getDoctypesMap()
@@ -211,7 +206,7 @@ function loadSchemas() {
 
 /** Parse raw AI response into normalized document array */
 export function parseRawDocs(text: string): any[] {
-    const cleaned = text.replace(/```json|```/g, '').trim()
+    const cleaned = stripFences(text)
     if (!cleaned) return []
     try {
         const parsed = JSON.parse(cleaned)
