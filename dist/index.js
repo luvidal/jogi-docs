@@ -743,7 +743,8 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         const dt = mapById[entry.id];
         const span = entry.start != null && entry.end != null ? entry.end - entry.start + 1 : 1;
         const isCedulaEntry = entry.id === "cedula-identidad" && !!entry.partId;
-        if (dt && dt.count > 1 && span > 1 && !isCedulaEntry) {
+        const isAnnual = dt?.freq === "annual";
+        if (dt && dt.count > 1 && span > 1 && !isCedulaEntry && !isAnnual) {
           for (let p = entry.start; p <= entry.end; p++) {
             expanded.push({ id: entry.id, start: p, end: p });
           }
@@ -845,17 +846,35 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         if (!mapById[typeId]) continue;
         const sortedClass = [...classEntries].sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
         const sortedExtracted = (extractedByType.get(typeId) || []).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
-        for (let i = 0; i < sortedClass.length; i++) {
-          const cls = sortedClass[i];
-          const ext = i < sortedExtracted.length ? sortedExtracted[i] : null;
-          allRawDocs.push({
-            id: typeId,
-            data: ext?.data || {},
-            docdate: ext?.docdate || null,
-            start: cls.start,
-            end: cls.end,
-            ...cls.partId ? { partId: cls.partId } : {}
-          });
+        if (sortedExtracted.length > sortedClass.length && sortedClass.length > 0) {
+          const classRange = {
+            start: Math.min(...sortedClass.map((c) => c.start ?? 0)),
+            end: Math.max(...sortedClass.map((c) => c.end ?? 0))
+          };
+          for (const ext of sortedExtracted) {
+            const start = ext.start ?? classRange.start;
+            const end = ext.end ?? start;
+            allRawDocs.push({
+              id: typeId,
+              data: ext.data || {},
+              docdate: ext.docdate || null,
+              start,
+              end
+            });
+          }
+        } else {
+          for (let i = 0; i < sortedClass.length; i++) {
+            const cls = sortedClass[i];
+            const ext = i < sortedExtracted.length ? sortedExtracted[i] : null;
+            allRawDocs.push({
+              id: typeId,
+              data: ext?.data || {},
+              docdate: ext?.docdate || null,
+              start: cls.start,
+              end: cls.end,
+              ...cls.partId ? { partId: cls.partId } : {}
+            });
+          }
         }
       }
     }

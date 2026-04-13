@@ -521,14 +521,17 @@ export async function Doc2Fields(
             }
         }
 
-        // Auto-expand multi-page entries for multi-count doctypes
+        // Auto-expand multi-page entries for multi-count doctypes.
+        // Skip annual doctypes (e.g. DAI) — a single annual document can span
+        // multiple pages, so expanding would incorrectly split it into separate files.
         {
             const expanded: typeof classified = []
             for (const entry of classified) {
                 const dt = mapById[entry.id]
                 const span = (entry.start != null && entry.end != null) ? entry.end - entry.start + 1 : 1
                 const isCedulaEntry = entry.id === 'cedula-identidad' && !!entry.partId
-                if (dt && dt.count > 1 && span > 1 && !isCedulaEntry) {
+                const isAnnual = dt?.freq === 'annual'
+                if (dt && dt.count > 1 && span > 1 && !isCedulaEntry && !isAnnual) {
                     for (let p = entry.start!; p <= entry.end!; p++) {
                         expanded.push({ id: entry.id, start: p, end: p })
                     }
@@ -637,7 +640,10 @@ export async function Doc2Fields(
 
         const extractionResults = await Promise.all(extractionPromises)
 
-        // Post-extraction merge
+        // Post-extraction merge: zip classified entries with extracted results.
+        // When extraction finds more documents than classified entries (e.g.
+        // two different-year DAIs within one merged page range), use the
+        // extra extracted docs with their own page ranges instead of dropping them.
         {
             const extractedByType = new Map<string, any[]>()
             for (const raw of extractionResults.flat()) {
@@ -654,18 +660,39 @@ export async function Doc2Fields(
                 const sortedExtracted = (extractedByType.get(typeId) || [])
                     .sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
 
-                for (let i = 0; i < sortedClass.length; i++) {
-                    const cls = sortedClass[i]
-                    const ext = i < sortedExtracted.length ? sortedExtracted[i] : null
+                // If extraction returned more docs than classified (e.g. one
+                // merged range contained multiple annual instances), prefer
+                // the extracted results since they have finer page ranges.
+                if (sortedExtracted.length > sortedClass.length && sortedClass.length > 0) {
+                    const classRange = {
+                        start: Math.min(...sortedClass.map(c => c.start ?? 0)),
+                        end: Math.max(...sortedClass.map(c => c.end ?? 0)),
+                    }
+                    for (const ext of sortedExtracted) {
+                        const start = ext.start ?? classRange.start
+                        const end = ext.end ?? start
+                        allRawDocs.push({
+                            id: typeId,
+                            data: ext.data || {},
+                            docdate: ext.docdate || null,
+                            start,
+                            end,
+                        })
+                    }
+                } else {
+                    for (let i = 0; i < sortedClass.length; i++) {
+                        const cls = sortedClass[i]
+                        const ext = i < sortedExtracted.length ? sortedExtracted[i] : null
 
-                    allRawDocs.push({
-                        id: typeId,
-                        data: ext?.data || {},
-                        docdate: ext?.docdate || null,
-                        start: cls.start,
-                        end: cls.end,
-                        ...(cls.partId ? { partId: cls.partId } : {}),
-                    })
+                        allRawDocs.push({
+                            id: typeId,
+                            data: ext?.data || {},
+                            docdate: ext?.docdate || null,
+                            start: cls.start,
+                            end: cls.end,
+                            ...(cls.partId ? { partId: cls.partId } : {}),
+                        })
+                    }
                 }
             }
         }
