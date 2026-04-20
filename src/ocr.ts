@@ -702,8 +702,9 @@ export async function Doc2Fields(
     const skipFace = options?.skipFace === true
     const documents = await Promise.all(allRawDocs.map(async (d: any) => {
         const normalized = normalizeDoc(d)
-        const { id, data, docdate, start, end } = normalized
+        const { id, data, start, end } = normalized
         let partId = normalized.partId
+        let docdate = normalized.docdate
 
         if (id === 'cedula-identidad' && partId === 'front' && !skipFace) {
             let imageBuffer: Buffer | null = null
@@ -726,6 +727,21 @@ export async function Doc2Fields(
                 }
             }
             delete data.foto_bbox
+        }
+
+        // Cedula back: AI often hallucinates front-only fields from the MRZ
+        // (e.g. reading 6-digit birth chunk as 1930-06-17). Strip them so the
+        // back row has no misleading dates — front is the authoritative source
+        // for fecha_nacimiento/emision/vencimiento/numero_documento. Also clear
+        // docdate so isFileExpired (maxAge based on ai_date) doesn't kill the
+        // back row and let a later front upload clobber its slot.
+        if (id === 'cedula-identidad' && partId === 'back') {
+            delete data.fecha_nacimiento
+            delete data.fecha_emision
+            delete data.fecha_vencimiento
+            delete data.numero_documento
+            delete data.foto_bbox
+            docdate = null
         }
 
         return {
