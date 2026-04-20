@@ -881,7 +881,9 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   }
   const skipFace = options?.skipFace === true;
   const documents = await Promise.all(allRawDocs.map(async (d) => {
-    const { id, data, docdate, start, end, partId } = normalizeDoc(d);
+    const normalized = normalizeDoc(d);
+    const { id, data, docdate, start, end } = normalized;
+    let partId = normalized.partId;
     if (id === "cedula-identidad" && partId === "front" && !skipFace) {
       let imageBuffer = null;
       if (isImage) {
@@ -893,6 +895,8 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         const result = await extractFace(imageBuffer);
         if (result) {
           data.foto_base64 = result.face;
+        } else {
+          partId = "back";
         }
       }
       delete data.foto_bbox;

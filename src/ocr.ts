@@ -701,7 +701,9 @@ export async function Doc2Fields(
     // Process documents, handling face extraction for cedulas
     const skipFace = options?.skipFace === true
     const documents = await Promise.all(allRawDocs.map(async (d: any) => {
-        const { id, data, docdate, start, end, partId } = normalizeDoc(d)
+        const normalized = normalizeDoc(d)
+        const { id, data, docdate, start, end } = normalized
+        let partId = normalized.partId
 
         if (id === 'cedula-identidad' && partId === 'front' && !skipFace) {
             let imageBuffer: Buffer | null = null
@@ -716,6 +718,11 @@ export async function Doc2Fields(
                 const result = await extractFace(imageBuffer)
                 if (result) {
                     data.foto_base64 = result.face
+                } else {
+                    // AWS Rekognition is authoritative: no face ⇒ this is the back,
+                    // even if the AI labeled it "front". Flip partId so downstream
+                    // part-aware logic (filename, deleteExistingParts) treats it as back.
+                    partId = 'back'
                 }
             }
             delete data.foto_bbox
