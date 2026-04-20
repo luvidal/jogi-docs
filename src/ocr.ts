@@ -40,7 +40,7 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-const PROMPT_TEMPLATE_VERSION = 'v4'
+const PROMPT_TEMPLATE_VERSION = 'v5'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.

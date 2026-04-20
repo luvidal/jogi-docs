@@ -939,7 +939,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v4";
+    PROMPT_TEMPLATE_VERSION = "v5";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
