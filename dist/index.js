@@ -116,7 +116,13 @@ var init_ai = __esm({
       const callGemini = await getGeminiCaller();
       try {
         const r = await callGemini({
-          model: options?.model ?? "gemini-2.5-flash-lite",
+          // gemini-2.5-flash (not flash-lite): derived queries search the
+          // web and reason over multiple sources, which benefits from the
+          // 2.5-flash thinking mode. Flash-Lite doesn't think and tends to
+          // return the first plausible number — worse for market-price type
+          // lookups. Cost is trivial either way (<1 ¢ per query) and this
+          // path is used sparingly.
+          model: options?.model ?? "gemini-2.5-flash",
           contents: prompt,
           config: { tools: [{ googleSearch: {} }] }
         });
