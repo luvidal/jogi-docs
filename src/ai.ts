@@ -1,6 +1,14 @@
 import type { AIUsage, GroundedResult, ModelArg } from './types'
 import { getGeminiCall } from './config'
 
+/**
+ * True when *something* can service a Gemini call: either a host-provided
+ * gate (e.g. Jogi routing through Vertex AI) or a local API key. Used by the
+ * gates below so switching the host to Vertex doesn't require keeping a
+ * dead `GEMINI_API_KEY` in the env just to satisfy these checks.
+ */
+const hasGeminiAuth = (): boolean => !!getGeminiCall() || !!process.env.GEMINI_API_KEY
+
 export interface VisionResult {
     text: string
     usage?: AIUsage
@@ -84,7 +92,7 @@ export const queryGrounded = async (
     prompt: string,
     options?: { model?: string }
 ): Promise<GroundedResult> => {
-    if (!process.env.GEMINI_API_KEY) return { text: '' }
+    if (!hasGeminiAuth()) return { text: '' }
     const callGemini = await getGeminiCaller()
     try {
         const r = await callGemini({
@@ -151,7 +159,7 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
         return callAnthropic(mimetype, base64, content)
     }
 
-    if (model === 'GEMINI' && process.env.GEMINI_API_KEY) {
+    if (model === 'GEMINI' && hasGeminiAuth()) {
         const callGemini = await getGeminiCaller()
         // Rate-limit retries are the host gate's job (it knows the real quota
         // state). Here we just do a light retry for transient SDK hiccups.

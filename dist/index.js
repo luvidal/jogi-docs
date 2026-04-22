@@ -65,10 +65,11 @@ var init_config = __esm({
 });
 
 // src/ai.ts
-var toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, getGeminiCaller; exports.queryGrounded = void 0; var callAnthropic, model2vision;
+var hasGeminiAuth, toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, getGeminiCaller; exports.queryGrounded = void 0; var callAnthropic, model2vision;
 var init_ai = __esm({
   "src/ai.ts"() {
     init_config();
+    hasGeminiAuth = () => !!getGeminiCall() || !!process.env.GEMINI_API_KEY;
     toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
     anthropicClient = null;
     openaiClient = null;
@@ -111,7 +112,7 @@ var init_ai = __esm({
       return (params) => gemini.models.generateContent(params);
     };
     exports.queryGrounded = async (prompt, options) => {
-      if (!process.env.GEMINI_API_KEY) return { text: "" };
+      if (!hasGeminiAuth()) return { text: "" };
       const callGemini = await getGeminiCaller();
       try {
         const r = await callGemini({
@@ -170,7 +171,7 @@ ${prompt}`;
       if (model === "ANTHROPIC" && process.env.ANTHROPIC_API_KEY) {
         return callAnthropic(mimetype, base64, content);
       }
-      if (model === "GEMINI" && process.env.GEMINI_API_KEY) {
+      if (model === "GEMINI" && hasGeminiAuth()) {
         const callGemini = await getGeminiCaller();
         const maxRetries = 2;
         let lastError = null;
