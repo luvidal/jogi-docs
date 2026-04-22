@@ -176,12 +176,15 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
             try {
                 const r = await callGemini({
                     model: 'gemini-2.5-flash-lite',
-                    contents: {
+                    // Vertex AI requires role-tagged messages; AI Studio was
+                    // lenient with bare { parts: [...] }. Always wrap.
+                    contents: [{
+                        role: 'user',
                         parts: [
                             { text: content },
                             { inlineData: { mimeType: mimetype, data: base64 } },
                         ],
-                    },
+                    }],
                     config: {
                         temperature: 0,
                         maxOutputTokens: 8192,
