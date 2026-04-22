@@ -110,7 +110,7 @@ var init_ai = __esm({
       const callGemini = await getGeminiCaller();
       try {
         const r = await callGemini({
-          model: options?.model ?? "gemini-2.0-flash",
+          model: options?.model ?? "gemini-2.5-flash-lite",
           contents: prompt,
           config: { tools: [{ googleSearch: {} }] }
         });
@@ -172,7 +172,7 @@ ${prompt}`;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
             const r = await callGemini({
-              model: "gemini-2.0-flash",
+              model: "gemini-2.5-flash-lite",
               contents: {
                 parts: [
                   { text: content },

@@ -96,7 +96,7 @@ export const queryGrounded = async (
     const callGemini = await getGeminiCaller()
     try {
         const r = await callGemini({
-            model: options?.model ?? 'gemini-2.0-flash',
+            model: options?.model ?? 'gemini-2.5-flash-lite',
             contents: prompt,
             config: { tools: [{ googleSearch: {} }] }
         })
@@ -169,7 +169,7 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 const r = await callGemini({
-                    model: 'gemini-2.0-flash',
+                    model: 'gemini-2.5-flash-lite',
                     contents: {
                         parts: [
                             { text: content },
