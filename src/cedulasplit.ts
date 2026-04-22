@@ -147,7 +147,12 @@ export async function detectAndSplitCompositeCedulaV3(
   let regions: CardRegions | null
   try {
     regions = await findCardRegionsWithAI(imageBuffer, mimetype, aiModel)
-  } catch (err) {
+  } catch (err: any) {
+    // Rate-limit / quota errors from the host-provided Gemini gate must bubble
+    // up so the upload handler can surface them to the user (429 + ai_busy).
+    // Swallowing would let the upload proceed as if no cedula was detected,
+    // and the user would never see a toast about why OCR is failing.
+    if (err?.status === 429) throw err
     getLogger().error(err, { module: 'cedula-split-v3', action: 'findRegions' })
     return null
   }

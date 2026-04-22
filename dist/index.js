@@ -1212,6 +1212,7 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
   try {
     regions = await findCardRegionsWithAI(imageBuffer, mimetype, aiModel);
   } catch (err) {
+    if (err?.status === 429) throw err;
     getLogger().error(err, { module: "cedula-split-v3", action: "findRegions" });
     return null;
   }
