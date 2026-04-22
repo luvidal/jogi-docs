@@ -366,9 +366,16 @@ async function extractFace(imageBuffer, _mimetype, _model, opts) {
   const extR = Math.max(0, dLeft + side - imgW);
   const extB = Math.max(0, dTop + side - imgH);
   if (side <= 10) return null;
+  const extW = imgW + extL + extR;
+  const extH = imgH + extT + extB;
+  const cropLeft = Math.max(0, Math.min(dLeft + extL, extW - 1));
+  const cropTop = Math.max(0, Math.min(dTop + extT, extH - 1));
+  const cropW = Math.max(0, Math.min(side, extW - cropLeft));
+  const cropH = Math.max(0, Math.min(side, extH - cropTop));
+  if (cropW < 32 || cropH < 32) return null;
   let face;
   try {
-    const photo = await sharp2(oriented).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).extract({ left: dLeft + extL, top: dTop + extT, width: side, height: side }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
+    const photo = await sharp2(oriented).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
     if (photo.length < 5e3) return null;
     face = photo.toString("base64");
   } catch (err) {
