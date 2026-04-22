@@ -22,7 +22,8 @@ function getGlobal() {
         error: (err, ctx) => console.error("[docprocessor]", err, ctx),
         warn: (msg, ctx) => console.warn("[docprocessor]", msg, ctx)
       },
-      rawDoctypes: null
+      rawDoctypes: null,
+      geminiCall: null
     };
   }
   return g[GLOBAL_KEY];
@@ -33,9 +34,13 @@ function configure(options) {
   if (options.doctypes) {
     state.rawDoctypes = options.doctypes;
   }
+  if (options.geminiCall) state.geminiCall = options.geminiCall;
 }
 function getLogger() {
   return getGlobal().logger;
+}
+function getGeminiCall() {
+  return getGlobal().geminiCall;
 }
 function getRawDoctypes() {
   const raw = getGlobal().rawDoctypes;
@@ -54,7 +59,7 @@ var init_config = __esm({
 });
 
 // src/ai.ts
-var toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, queryGrounded, callAnthropic, model2vision;
+var toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, getGeminiCaller, queryGrounded, callAnthropic, model2vision;
 var init_ai = __esm({
   "src/ai.ts"() {
     init_config();
@@ -93,11 +98,17 @@ var init_ai = __esm({
       return status === 429 || status === "429" || status === 503 || status === "503" || msg.includes("429") || msg.includes("503") || msg.includes("rate") || msg.includes("resource_exhausted") || msg.includes("quota") || msg.includes("unavailable");
     };
     delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    getGeminiCaller = async () => {
+      const hosted = getGeminiCall();
+      if (hosted) return hosted;
+      const gemini = await getGemini();
+      return (params) => gemini.models.generateContent(params);
+    };
     queryGrounded = async (prompt, options) => {
       if (!process.env.GEMINI_API_KEY) return { text: "" };
-      const gemini = await getGemini();
+      const callGemini = await getGeminiCaller();
       try {
-        const r = await gemini.models.generateContent({
+        const r = await callGemini({
           model: options?.model ?? "gemini-2.0-flash",
           contents: prompt,
           config: { tools: [{ googleSearch: {} }] }
@@ -154,12 +165,12 @@ ${prompt}`;
         return callAnthropic(mimetype, base64, content);
       }
       if (model === "GEMINI" && process.env.GEMINI_API_KEY) {
-        const gemini = await getGemini();
+        const callGemini = await getGeminiCaller();
         const maxRetries = 2;
         let lastError = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
-            const r = await gemini.models.generateContent({
+            const r = await callGemini({
               model: "gemini-2.0-flash",
               contents: {
                 parts: [
@@ -180,16 +191,13 @@ ${prompt}`;
             };
           } catch (err) {
             lastError = err;
-            if (isRateLimitError(err) && attempt < maxRetries) {
+            if (isRateLimitError(err)) throw err;
+            if (attempt < maxRetries) {
               await delay(1e3 * (attempt + 1));
               continue;
             }
             break;
           }
-        }
-        if (isRateLimitError(lastError) && process.env.ANTHROPIC_API_KEY) {
-          getLogger().warn("Gemini rate limited, falling back to Anthropic");
-          return callAnthropic(mimetype, base64, content);
         }
         if (lastError) throw lastError;
       }

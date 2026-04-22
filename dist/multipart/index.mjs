@@ -8,7 +8,8 @@ function getGlobal() {
         error: (err, ctx) => console.error("[docprocessor]", err, ctx),
         warn: (msg, ctx) => console.warn("[docprocessor]", msg, ctx)
       },
-      rawDoctypes: null
+      rawDoctypes: null,
+      geminiCall: null
     };
   }
   return g[GLOBAL_KEY];

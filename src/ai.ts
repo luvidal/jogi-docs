@@ -1,5 +1,5 @@
 import type { AIUsage, GroundedResult, ModelArg } from './types'
-import { getLogger } from './config'
+import { getGeminiCall } from './config'
 
 export interface VisionResult {
     text: string
@@ -63,6 +63,19 @@ const isRateLimitError = (err: any): boolean => {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
+ * Resolve the Gemini call path. If the host wired a `geminiCall` hook via
+ * `configure({ geminiCall })`, every request flows through it (concurrency
+ * gate + typed 429 mapping live on the host side). Otherwise fall back to
+ * the SDK directly — useful for CLI / tests / standalone consumers.
+ */
+const getGeminiCaller = async (): Promise<(params: { model: string; contents: any; config?: any }) => Promise<any>> => {
+    const hosted = getGeminiCall()
+    if (hosted) return hosted
+    const gemini = await getGemini()
+    return (params) => gemini.models.generateContent(params)
+}
+
+/**
  * Query Gemini with Google Search grounding enabled.
  * Used for derived fields that need real-world data (e.g., market prices).
  * Returns raw text response — caller is responsible for parsing.
@@ -72,9 +85,9 @@ export const queryGrounded = async (
     options?: { model?: string }
 ): Promise<GroundedResult> => {
     if (!process.env.GEMINI_API_KEY) return { text: '' }
-    const gemini = await getGemini()
+    const callGemini = await getGeminiCaller()
     try {
-        const r = await gemini.models.generateContent({
+        const r = await callGemini({
             model: options?.model ?? 'gemini-2.0-flash',
             contents: prompt,
             config: { tools: [{ googleSearch: {} }] }
@@ -139,13 +152,15 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
     }
 
     if (model === 'GEMINI' && process.env.GEMINI_API_KEY) {
-        const gemini = await getGemini()
+        const callGemini = await getGeminiCaller()
+        // Rate-limit retries are the host gate's job (it knows the real quota
+        // state). Here we just do a light retry for transient SDK hiccups.
         const maxRetries = 2
         let lastError: any = null
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                const r = await gemini.models.generateContent({
+                const r = await callGemini({
                     model: 'gemini-2.0-flash',
                     contents: {
                         parts: [
@@ -166,18 +181,16 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
                 }
             } catch (err: any) {
                 lastError = err
-                if (isRateLimitError(err) && attempt < maxRetries) {
+                // Never retry rate-limit errors — the host surfaces them as
+                // typed 429s and the UI shows a dedicated toast. Retrying
+                // here would silently compound the collision.
+                if (isRateLimitError(err)) throw err
+                if (attempt < maxRetries) {
                     await delay(1000 * (attempt + 1))
                     continue
                 }
                 break
             }
-        }
-
-        // Fallback to Anthropic if Gemini rate limited and Anthropic is available
-        if (isRateLimitError(lastError) && process.env.ANTHROPIC_API_KEY) {
-            getLogger().warn('Gemini rate limited, falling back to Anthropic')
-            return callAnthropic(mimetype, base64, content)
         }
 
         if (lastError) throw lastError

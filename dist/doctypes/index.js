@@ -10,7 +10,8 @@ function getGlobal() {
         error: (err, ctx) => console.error("[docprocessor]", err, ctx),
         warn: (msg, ctx) => console.warn("[docprocessor]", msg, ctx)
       },
-      rawDoctypes: null
+      rawDoctypes: null,
+      geminiCall: null
     };
   }
   return g[GLOBAL_KEY];
@@ -21,6 +22,7 @@ function configure(options) {
   if (options.doctypes) {
     state.rawDoctypes = options.doctypes;
   }
+  if (options.geminiCall) state.geminiCall = options.geminiCall;
 }
 function getRawDoctypes() {
   const raw = getGlobal().rawDoctypes;
