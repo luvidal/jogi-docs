@@ -328,7 +328,8 @@ function getClient(opts) {
 }
 async function extractFace(imageBuffer, _mimetype, _model, opts) {
   const log = getLogger();
-  const metadata = await sharp2__default.default(imageBuffer).metadata();
+  const oriented = await sharp2__default.default(imageBuffer).rotate().toBuffer();
+  const metadata = await sharp2__default.default(oriented).metadata();
   const imgW = metadata.width || 0;
   const imgH = metadata.height || 0;
   if (!imgW || !imgH) return null;
@@ -336,7 +337,7 @@ async function extractFace(imageBuffer, _mimetype, _model, opts) {
   let faces;
   try {
     const cmd = new clientRekognition.DetectFacesCommand({
-      Image: { Bytes: imageBuffer },
+      Image: { Bytes: oriented },
       Attributes: ["DEFAULT"]
     });
     const res = await client.send(cmd);
@@ -373,7 +374,7 @@ async function extractFace(imageBuffer, _mimetype, _model, opts) {
   if (side <= 10) return null;
   let face;
   try {
-    const photo = await sharp2__default.default(imageBuffer).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).extract({ left: dLeft + extL, top: dTop + extT, width: side, height: side }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
+    const photo = await sharp2__default.default(oriented).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).extract({ left: dLeft + extL, top: dTop + extT, width: side, height: side }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
     if (photo.length < 5e3) return null;
     face = photo.toString("base64");
   } catch (err) {

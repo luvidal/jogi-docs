@@ -66,7 +66,11 @@ export async function extractFace(
 ): Promise<FaceExtractionResult | null> {
   const log = getLogger()
 
-  const metadata = await sharp(imageBuffer).metadata()
+  // Normalize EXIF orientation: Rekognition auto-reads EXIF, sharp does not.
+  // Without this, phone photos with a rotation tag produce a bbox in rotated
+  // coordinates but an extract() in stored (unrotated) pixels → "bad extract area".
+  const oriented = await sharp(imageBuffer).rotate().toBuffer()
+  const metadata = await sharp(oriented).metadata()
   const imgW = metadata.width || 0
   const imgH = metadata.height || 0
   if (!imgW || !imgH) return null
@@ -76,7 +80,7 @@ export async function extractFace(
   let faces: { bbox: BBox; confidence: number; area: number }[]
   try {
     const cmd = new DetectFacesCommand({
-      Image: { Bytes: imageBuffer },
+      Image: { Bytes: oriented },
       Attributes: ['DEFAULT'],
     })
     const res = await client.send(cmd)
@@ -130,7 +134,7 @@ export async function extractFace(
   // Step 4: Extend → extract → resize to 256×256
   let face: string
   try {
-    const photo = await sharp(imageBuffer)
+    const photo = await sharp(oriented)
       .extend({ top: extT, bottom: extB, left: extL, right: extR, background: '#FFFFFF' })
       .extract({ left: dLeft + extL, top: dTop + extT, width: side, height: side })
       .resize(256, 256)
