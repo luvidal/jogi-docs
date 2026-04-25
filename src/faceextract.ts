@@ -147,10 +147,23 @@ export async function extractFace(
   if (cropW < 32 || cropH < 32) return null
 
   // Step 4: Extend → extract → resize to 256×256
+  //
+  // IMPORTANT: extend + extract must run in TWO separate sharp pipelines.
+  // Chained in one toBuffer call, libvips' lazy evaluation can apply
+  // extract against the pre-extend dimensions — so even when the rect is
+  // mathematically inside the extended frame (verified by the clamp
+  // above) sharp still throws "extract_area: bad extract area". Forcing
+  // a buffer between the two ops eliminates that ambiguity.
   let face: string
   try {
-    const photo = await sharp(oriented)
-      .extend({ top: extT, bottom: extB, left: extL, right: extR, background: '#FFFFFF' })
+    const needsExtend = extL || extR || extT || extB
+    const extended = needsExtend
+      ? await sharp(oriented)
+          .extend({ top: extT, bottom: extB, left: extL, right: extR, background: '#FFFFFF' })
+          .toBuffer()
+      : oriented
+
+    const photo = await sharp(extended)
       .extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH })
       .resize(256, 256)
       .jpeg({ quality: 92 })
@@ -159,7 +172,15 @@ export async function extractFace(
     if (photo.length < 5000) return null
     face = photo.toString('base64')
   } catch (err) {
-    log.error(err, { module: 'face-extract-v4', action: 'crop' })
+    log.error(err, {
+      module: 'face-extract-v4',
+      action: 'crop',
+      // Surface the rect + frame so the next failure is diagnosable
+      // without having to reproduce locally.
+      imgW, imgH, extL, extR, extT, extB, extW, extH,
+      cropLeft, cropTop, cropW, cropH, side,
+      bbox: best.bbox,
+    })
     return null
   }
 

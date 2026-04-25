@@ -381,11 +381,32 @@ async function extractFace(imageBuffer, _mimetype, _model, opts) {
   if (cropW < 32 || cropH < 32) return null;
   let face;
   try {
-    const photo = await sharp2__default.default(oriented).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
+    const needsExtend = extL || extR || extT || extB;
+    const extended = needsExtend ? await sharp2__default.default(oriented).extend({ top: extT, bottom: extB, left: extL, right: extR, background: "#FFFFFF" }).toBuffer() : oriented;
+    const photo = await sharp2__default.default(extended).extract({ left: cropLeft, top: cropTop, width: cropW, height: cropH }).resize(256, 256).jpeg({ quality: 92 }).toBuffer();
     if (photo.length < 5e3) return null;
     face = photo.toString("base64");
   } catch (err) {
-    log.error(err, { module: "face-extract-v4", action: "crop" });
+    log.error(err, {
+      module: "face-extract-v4",
+      action: "crop",
+      // Surface the rect + frame so the next failure is diagnosable
+      // without having to reproduce locally.
+      imgW,
+      imgH,
+      extL,
+      extR,
+      extT,
+      extB,
+      extW,
+      extH,
+      cropLeft,
+      cropTop,
+      cropW,
+      cropH,
+      side,
+      bbox: best.bbox
+    });
     return null;
   }
   return {
