@@ -517,6 +517,9 @@ export async function Doc2Fields(
 
         let totalPages = 0
         let pdfDoc: PDFDocument | null = null
+        // Hoisted so the container second-pass can reuse the slices instead of
+        // making a single big call against the full PDF.
+        let pageBase64s: string[] = []
         try {
             pdfDoc = await PDFDocument.load(buffer)
             totalPages = pdfDoc.getPageCount()
@@ -535,7 +538,6 @@ export async function Doc2Fields(
                 // through `Promise.all`. The host gate (`MAX_CONCURRENT`, 20 by
                 // default) caps real concurrency. A 10-page PDF goes from
                 // N×classify-latency sequential to roughly one classify-latency.
-                const pageBase64s: string[] = []
                 for (let p = 1; p <= totalPages; p++) {
                     const out = await PDFDocument.create()
                     const [copied] = await out.copyPages(pdfDoc, [p - 1])
@@ -664,14 +666,62 @@ export async function Doc2Fields(
 
                 if (!hasSubDocs && totalPages > 1) {
                     // All pages classified as container — second-pass classification
-                    // against contained sub-doctypes only
+                    // against contained sub-doctypes only.
+                    //
+                    // Parallel per-page when slices are available (always the case
+                    // for totalPages > 1; we already produced `pageBase64s` above).
+                    // A single full-PDF call here on flash-with-thinking on a 12+
+                    // page Carpeta Tributaria was tens of seconds; per-page parallel
+                    // is bounded by max(per-call) and the host's `MAX_CONCURRENT`.
                     const subDoctypes = doctypes.filter(dt => containedIds.has(dt.id))
                     if (subDoctypes.length > 0) {
-                        const subClassified = await classifyDocument(
-                            base64, mimetype, aiModel, isPDF, subDoctypes, usage, classifyGeminiModel
-                        )
-                        for (const sub of subClassified) {
-                            classified.push(sub)
+                        if (pageBase64s.length === totalPages) {
+                            const subPerPage = await Promise.all(
+                                pageBase64s.map(async (b64, idx) => {
+                                    const localUsage: AIUsage = {}
+                                    const c = await classifyDocument(b64, mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel)
+                                    return { c, localUsage, page: idx + 1 }
+                                })
+                            )
+                            // Merge adjacent same-doctype pages into ranges, same
+                            // policy as phase 1 (cédula entries with partId stay
+                            // single-page).
+                            const subPerPageFlat: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                            subPerPage.forEach(({ c, localUsage, page }) => {
+                                Object.assign(usage, addUsage(usage, localUsage))
+                                for (const entry of c) {
+                                    subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence })
+                                }
+                            })
+                            for (let i = 0; i < subPerPageFlat.length; i++) {
+                                const entry = subPerPageFlat[i]
+                                if (entry.partId) {
+                                    classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
+                                    continue
+                                }
+                                let end = entry.page
+                                let minConf = entry.confidence
+                                while (
+                                    i + 1 < subPerPageFlat.length &&
+                                    subPerPageFlat[i + 1].id === entry.id &&
+                                    !subPerPageFlat[i + 1].partId &&
+                                    subPerPageFlat[i + 1].page === end + 1
+                                ) {
+                                    end = subPerPageFlat[i + 1].page
+                                    const next = subPerPageFlat[i + 1].confidence
+                                    if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
+                                    i++
+                                }
+                                classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
+                            }
+                        } else {
+                            // Fallback (single-page or slicing failed): one full-PDF call.
+                            const subClassified = await classifyDocument(
+                                base64, mimetype, aiModel, isPDF, subDoctypes, usage, classifyGeminiModel
+                            )
+                            for (const sub of subClassified) {
+                                classified.push(sub)
+                            }
                         }
                     }
                 }

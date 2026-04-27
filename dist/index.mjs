@@ -780,11 +780,11 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
     let classified;
     let totalPages = 0;
     let pdfDoc = null;
+    let pageBase64s = [];
     try {
       pdfDoc = await PDFDocument.load(buffer);
       totalPages = pdfDoc.getPageCount();
       if (totalPages > 1) {
-        const pageBase64s = [];
         for (let p = 1; p <= totalPages; p++) {
           const out = await PDFDocument.create();
           const [copied] = await out.copyPages(pdfDoc, [p - 1]);
@@ -881,17 +881,50 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         if (!hasSubDocs && totalPages > 1) {
           const subDoctypes = doctypes.filter((dt) => containedIds.has(dt.id));
           if (subDoctypes.length > 0) {
-            const subClassified = await classifyDocument(
-              base64,
-              mimetype,
-              aiModel,
-              isPDF,
-              subDoctypes,
-              usage,
-              classifyGeminiModel
-            );
-            for (const sub of subClassified) {
-              classified.push(sub);
+            if (pageBase64s.length === totalPages) {
+              const subPerPage = await Promise.all(
+                pageBase64s.map(async (b64, idx) => {
+                  const localUsage = {};
+                  const c = await classifyDocument(b64, mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel);
+                  return { c, localUsage, page: idx + 1 };
+                })
+              );
+              const subPerPageFlat = [];
+              subPerPage.forEach(({ c, localUsage, page }) => {
+                Object.assign(usage, addUsage(usage, localUsage));
+                for (const entry of c) {
+                  subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence });
+                }
+              });
+              for (let i = 0; i < subPerPageFlat.length; i++) {
+                const entry = subPerPageFlat[i];
+                if (entry.partId) {
+                  classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
+                  continue;
+                }
+                let end = entry.page;
+                let minConf = entry.confidence;
+                while (i + 1 < subPerPageFlat.length && subPerPageFlat[i + 1].id === entry.id && !subPerPageFlat[i + 1].partId && subPerPageFlat[i + 1].page === end + 1) {
+                  end = subPerPageFlat[i + 1].page;
+                  const next = subPerPageFlat[i + 1].confidence;
+                  if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
+                  i++;
+                }
+                classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
+              }
+            } else {
+              const subClassified = await classifyDocument(
+                base64,
+                mimetype,
+                aiModel,
+                isPDF,
+                subDoctypes,
+                usage,
+                classifyGeminiModel
+              );
+              for (const sub of subClassified) {
+                classified.push(sub);
+              }
             }
           }
         }
