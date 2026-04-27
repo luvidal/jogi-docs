@@ -790,17 +790,27 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       pdfDoc = await pdfLib.PDFDocument.load(buffer);
       totalPages = pdfDoc.getPageCount();
       if (totalPages > 1) {
-        const perPage = [];
+        const pageBase64s = [];
         for (let p = 1; p <= totalPages; p++) {
           const out = await pdfLib.PDFDocument.create();
           const [copied] = await out.copyPages(pdfDoc, [p - 1]);
           out.addPage(copied);
-          const pageBase64 = Buffer.from(await out.save()).toString("base64");
-          const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel);
-          for (const c of pageClassified) {
-            perPage.push({ id: c.id, page: p, partId: c.partId, confidence: c.confidence });
-          }
+          pageBase64s.push(Buffer.from(await out.save()).toString("base64"));
         }
+        const perPageClassifications = await Promise.all(
+          pageBase64s.map(async (b64) => {
+            const localUsage = {};
+            const classified2 = await classifyDocument(b64, mimetype, aiModel, false, doctypes, localUsage, classifyGeminiModel);
+            return { classified: classified2, localUsage };
+          })
+        );
+        const perPage = [];
+        perPageClassifications.forEach(({ classified: classified2, localUsage }, idx) => {
+          Object.assign(usage, addUsage(usage, localUsage));
+          for (const c of classified2) {
+            perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence });
+          }
+        });
         classified = [];
         for (let i = 0; i < perPage.length; i++) {
           const entry = perPage[i];

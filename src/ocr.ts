@@ -526,18 +526,42 @@ export async function Doc2Fields(
                 // with the same doctype into document ranges.
                 // This avoids context bias where a Maat informe comercial page
                 // gets misclassified as informe-deuda when grouped with debt pages.
-                const perPage: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                //
+                // Two-phase to keep `pdf-lib` happy: page slicing runs serially
+                // because `copyPages` is async and shares state on the source
+                // `pdfDoc`; concurrent calls on the same source can interleave
+                // mid-await. Slicing is CPU-bound and cheap (~ms per page).
+                // Classification is the slow network call, so we fan that out
+                // through `Promise.all`. The host gate (`MAX_CONCURRENT`, 20 by
+                // default) caps real concurrency. A 10-page PDF goes from
+                // N×classify-latency sequential to roughly one classify-latency.
+                const pageBase64s: string[] = []
                 for (let p = 1; p <= totalPages; p++) {
                     const out = await PDFDocument.create()
                     const [copied] = await out.copyPages(pdfDoc, [p - 1])
                     out.addPage(copied)
-                    const pageBase64 = Buffer.from(await out.save()).toString('base64')
-
-                    const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel)
-                    for (const c of pageClassified) {
-                        perPage.push({ id: c.id, page: p, partId: c.partId, confidence: c.confidence })
-                    }
+                    pageBase64s.push(Buffer.from(await out.save()).toString('base64'))
                 }
+
+                // Each call accumulates into its own per-page usage bag so the
+                // shared `usage` object isn't subject to read-modify-write
+                // races between concurrent classify calls. We fold them all
+                // into the global `usage` once Promise.all resolves.
+                const perPageClassifications = await Promise.all(
+                    pageBase64s.map(async (b64) => {
+                        const localUsage: AIUsage = {}
+                        const classified = await classifyDocument(b64, mimetype, aiModel, false, doctypes, localUsage, classifyGeminiModel)
+                        return { classified, localUsage }
+                    })
+                )
+
+                const perPage: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                perPageClassifications.forEach(({ classified, localUsage }, idx) => {
+                    Object.assign(usage, addUsage(usage, localUsage))
+                    for (const c of classified) {
+                        perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence })
+                    }
+                })
 
                 // Merge adjacent pages with the same doctype into ranges. Track
                 // the minimum per-page confidence across the merged span so a
