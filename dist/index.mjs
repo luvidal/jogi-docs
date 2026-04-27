@@ -145,7 +145,7 @@ var init_ai = __esm({
         usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
       };
     };
-    model2vision = async (model, mimetype, base64, prompt) => {
+    model2vision = async (model, mimetype, base64, prompt, geminiModel) => {
       const content = `${strict}
 ${prompt}`;
       if (model === "GPT" && process.env.OPENAI_API_KEY) {
@@ -178,7 +178,7 @@ ${prompt}`;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
             const r = await callGemini({
-              model: "gemini-2.5-flash-lite",
+              model: geminiModel ?? "gemini-2.5-flash-lite",
               // Vertex AI requires role-tagged messages; AI Studio was
               // lenient with bare { parts: [...] }. Always wrap.
               contents: [{
@@ -608,7 +608,7 @@ function parseRawDocs(text) {
 }
 function normalizeDoc(d) {
   const id = d?.id || d?.doctypeid || null;
-  const META_KEYS = /* @__PURE__ */ new Set(["id", "doctypeid", "doc_type_id", "data", "docdate", "document_date", "documentDate", "start", "end", "partId", "part_id", "partid", "label"]);
+  const META_KEYS = /* @__PURE__ */ new Set(["id", "doctypeid", "doc_type_id", "data", "docdate", "document_date", "documentDate", "confidence", "start", "end", "partId", "part_id", "partid", "label"]);
   const flatData = Object.fromEntries(Object.entries(d || {}).filter(([k]) => !META_KEYS.has(k)));
   const data = d?.data && typeof d.data === "object" ? d.data : Object.keys(flatData).length > 0 ? flatData : {};
   const rawDate = d?.docdate || d?.document_date || d?.documentDate || null;
@@ -616,9 +616,10 @@ function normalizeDoc(d) {
   const start = Number.isFinite(d?.start) ? Number(d.start) : d?.start ? parseInt(d.start, 10) : void 0;
   const end = Number.isFinite(d?.end) ? Number(d.end) : d?.end ? parseInt(d.end, 10) : void 0;
   const partId = d?.partId || d?.part_id || d?.partid || void 0;
-  return { id, data, docdate, start, end, partId };
+  const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
+  return { id, data, docdate, start, end, partId, confidence };
 }
-async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum) {
+async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum, geminiModel) {
   const typeList = doctypes.map((dt) => {
     const base = `\u2022 ${dt.id}: ${dt.definition || dt.label}`;
     if (!dt.fieldDefs?.length) return base;
@@ -632,14 +633,15 @@ async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageA
   }).join("\n");
   const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Devuelve JSON: {"documents":[{"id":"tipo-id"${isPDF ? ',"start":1,"end":1' : ""},"partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ""},"partId":"front|back"}]}
 ${isPDF ? `"start"/"end": p\xE1ginas 1-indexed. Si un tipo aparece m\xFAltiples veces (ej: varias liquidaciones), devuelve uno por instancia con su rango de p\xE1ginas. P\xE1ginas que no correspondan a ning\xFAn tipo listado deben ignorarse.
 Si una p\xE1gina contiene AMBAS caras de una c\xE9dula (frente y reverso), devuelve DOS elementos con la misma p\xE1gina y diferente partId.` : `Si la imagen contiene AMBAS caras de una c\xE9dula (frente y reverso apilados), devuelve DOS elementos. Para otro documento, devuelve uno solo.`}
 "partId": solo para c\xE9dula-identidad. Frente tiene foto/RUT/nombre. Reverso tiene firma/huella/profesi\xF3n.
+"confidence": 0.0-1.0, qu\xE9 tan seguro est\xE1s del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 Tipos v\xE1lidos:
 ${typeList}`;
-  const vr = await model2vision(model, mimetype, base64, prompt);
+  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   const rawDocs = parseRawDocs(vr.text);
   return rawDocs.map((d) => {
@@ -647,10 +649,17 @@ ${typeList}`;
     const start = Number.isFinite(d?.start) ? Number(d.start) : d?.start ? parseInt(d.start, 10) : void 0;
     const end = Number.isFinite(d?.end) ? Number(d.end) : d?.end ? parseInt(d.end, 10) : void 0;
     const partId = d?.partId || d?.part_id || d?.partid || void 0;
-    return { id, ...Number.isFinite(start) ? { start } : {}, ...Number.isFinite(end) ? { end } : {}, ...partId ? { partId } : {} };
+    const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
+    return {
+      id,
+      ...Number.isFinite(start) ? { start } : {},
+      ...Number.isFinite(end) ? { end } : {},
+      ...partId ? { partId } : {},
+      ...confidence !== void 0 ? { confidence } : {}
+    };
   }).filter((d) => d.id);
 }
-async function classifyAndExtractImage(base64, mimetype, model, doctypes, usageAccum) {
+async function classifyAndExtractImage(base64, mimetype, model, doctypes, usageAccum, geminiModel) {
   const typeList = doctypes.map((dt) => {
     const fields = JSON.stringify(dt.fieldDefs.map((f) => {
       const entry = { key: f.key, type: f.type };
@@ -664,7 +673,8 @@ async function classifyAndExtractImage(base64, mimetype, model, doctypes, usageA
 Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
 Si la imagen contiene AMBAS caras de una c\xE9dula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
 Para c\xE9dula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
-Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0,"data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
+- "confidence": 0.0-1.0, qu\xE9 tan seguro est\xE1s del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - "docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido o descargado. Ej: liquidaci\xF3n de junio 2025 emitida el 25 mayo \u2192 2025-06-01. Resumen anual 2024 \u2192 2024-01-01. Para certificados sin per\xEDodo (c\xE9dula, nacimiento, matrimonio), usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
 - "partId": solo para c\xE9dula-identidad
 - Campos type:"num": devuelve n\xFAmero entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
@@ -673,11 +683,11 @@ Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD"
 - Solo JSON, sin markdown
 Tipos v\xE1lidos:
 ${typeList}`;
-  const vr = await model2vision(model, mimetype, base64, prompt);
+  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   return parseRawDocs(vr.text);
 }
-async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries, usageAccum) {
+async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries, usageAccum, geminiModel) {
   const fields = JSON.stringify(doctype.fieldDefs.map((f) => {
     const entry = { key: f.key, type: f.type };
     if (f.ai) entry.ai = f.ai;
@@ -698,7 +708,7 @@ ${cedulaBbox}
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`;
-  const vr = await model2vision(model, mimetype, base64, prompt);
+  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   return parseRawDocs(vr.text);
 }
@@ -710,13 +720,62 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const base64 = buffer.toString("base64");
   const aiModel = toAiModel(model);
   const usage = {};
+  const classifyGeminiModel = options?.geminiModels?.classify;
+  const extractGeminiModel = options?.geminiModels?.extract;
   let allRawDocs;
   if (forcedDoctypeId) {
     const doctype = mapById[forcedDoctypeId];
     if (!doctype) return { documents: [] };
-    allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage);
+    allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage, extractGeminiModel);
   } else if (isImage) {
-    allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage);
+    if (classifyGeminiModel) {
+      const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel);
+      if (classified.length === 0) return { documents: [] };
+      const byType = /* @__PURE__ */ new Map();
+      for (const c of classified) {
+        const list = byType.get(c.id) || [];
+        list.push({ partId: c.partId, confidence: c.confidence });
+        byType.set(c.id, list);
+      }
+      const extractionResults = await Promise.all(
+        Array.from(byType.entries()).map(async ([typeId, entries]) => {
+          const dt = mapById[typeId];
+          if (!dt) return { typeId, results: [] };
+          const results = await extractFields(
+            base64,
+            mimetype,
+            aiModel,
+            false,
+            typeId,
+            dt,
+            entries.map((e) => ({ partId: e.partId })),
+            usage,
+            extractGeminiModel
+          );
+          return { typeId, results };
+        })
+      );
+      const extractedByType = /* @__PURE__ */ new Map();
+      for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results);
+      allRawDocs = [];
+      for (const [typeId, classEntries] of byType) {
+        if (!mapById[typeId]) continue;
+        const ext = extractedByType.get(typeId) || [];
+        for (let i = 0; i < classEntries.length; i++) {
+          const cls = classEntries[i];
+          const e = i < ext.length ? normalizeDoc(ext[i]) : null;
+          allRawDocs.push({
+            id: typeId,
+            data: e?.data || {},
+            docdate: e?.docdate || null,
+            ...cls.confidence !== void 0 ? { confidence: cls.confidence } : {},
+            ...cls.partId ? { partId: cls.partId } : {}
+          });
+        }
+      }
+    } else {
+      allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage, extractGeminiModel);
+    }
   } else {
     let classified;
     let totalPages = 0;
@@ -731,30 +790,33 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
           const [copied] = await out.copyPages(pdfDoc, [p - 1]);
           out.addPage(copied);
           const pageBase64 = Buffer.from(await out.save()).toString("base64");
-          const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage);
+          const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel);
           for (const c of pageClassified) {
-            perPage.push({ id: c.id, page: p, partId: c.partId });
+            perPage.push({ id: c.id, page: p, partId: c.partId, confidence: c.confidence });
           }
         }
         classified = [];
         for (let i = 0; i < perPage.length; i++) {
           const entry = perPage[i];
           if (entry.partId) {
-            classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId });
+            classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
             continue;
           }
           let end = entry.page;
+          let minConf = entry.confidence;
           while (i + 1 < perPage.length && perPage[i + 1].id === entry.id && !perPage[i + 1].partId && perPage[i + 1].page === end + 1) {
             end = perPage[i + 1].page;
+            const next = perPage[i + 1].confidence;
+            if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
             i++;
           }
-          classified.push({ id: entry.id, start: entry.page, end });
+          classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
         }
       } else {
-        classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage);
+        classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel);
       }
     } catch {
-      classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage);
+      classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel);
     }
     if (classified.length === 0) {
       return { documents: [] };
@@ -815,21 +877,23 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
               aiModel,
               isPDF,
               subDoctypes,
-              usage
+              usage,
+              classifyGeminiModel
             );
             for (const sub of subClassified) {
               classified.push(sub);
             }
           }
         }
+        const prior = classified.find((c) => c.id === containerId);
         classified = classified.filter((c) => c.id !== containerId);
-        classified.unshift({ id: containerId, start: 1, end: totalPages });
+        classified.unshift({ id: containerId, start: 1, end: totalPages, ...prior?.confidence !== void 0 ? { confidence: prior.confidence } : {} });
       }
     }
     const byType = /* @__PURE__ */ new Map();
     for (const c of classified) {
       const existing = byType.get(c.id) || [];
-      existing.push({ start: c.start, end: c.end, partId: c.partId });
+      existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence });
       byType.set(c.id, existing);
     }
     const MAX_PER_BATCH = 8;
@@ -864,12 +928,12 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       if (adjustedEntries.length > MAX_PER_BATCH) {
         for (let i = 0; i < adjustedEntries.length; i += MAX_PER_BATCH) {
           extractionPromises.push(
-            extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage)
+            extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage, extractGeminiModel)
           );
         }
       } else {
         extractionPromises.push(
-          extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage)
+          extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage, extractGeminiModel)
         );
       }
     }
@@ -892,6 +956,8 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
             start: Math.min(...sortedClass.map((c) => c.start ?? 0)),
             end: Math.max(...sortedClass.map((c) => c.end ?? 0))
           };
+          const classConfidences = sortedClass.map((c) => c.confidence).filter((v) => v !== void 0);
+          const minConf = classConfidences.length > 0 ? Math.min(...classConfidences) : void 0;
           for (const ext of sortedExtracted) {
             const start = ext.start ?? classRange.start;
             const end = ext.end ?? start;
@@ -899,6 +965,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
               id: typeId,
               data: ext.data || {},
               docdate: ext.docdate || null,
+              ...minConf !== void 0 ? { confidence: minConf } : {},
               start,
               end
             });
@@ -911,6 +978,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
               id: typeId,
               data: ext?.data || {},
               docdate: ext?.docdate || null,
+              ...cls.confidence !== void 0 ? { confidence: cls.confidence } : {},
               start: cls.start,
               end: cls.end,
               ...cls.partId ? { partId: cls.partId } : {}
@@ -923,7 +991,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const skipFace = options?.skipFace === true;
   const documents = await Promise.all(allRawDocs.map(async (d) => {
     const normalized = normalizeDoc(d);
-    const { id, data, start, end } = normalized;
+    const { id, data, start, end, confidence } = normalized;
     let partId = normalized.partId;
     let docdate = normalized.docdate;
     if (id === "cedula-identidad" && partId === "front" && !skipFace) {
@@ -956,6 +1024,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       label: id ? mapById?.[id]?.label || null : null,
       data,
       docdate,
+      ...confidence !== void 0 ? { confidence } : {},
       ...Number.isFinite(start) ? { start } : {},
       ...Number.isFinite(end) ? { end } : {},
       ...partId ? { partId } : {}
@@ -986,7 +1055,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v5";
+    PROMPT_TEMPLATE_VERSION = "v6";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {

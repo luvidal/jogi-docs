@@ -137,7 +137,13 @@ const callAnthropic = async (mimetype: string, base64: string, content: string):
     }
 }
 
-export const model2vision = async (model: AiModel, mimetype: string, base64: string, prompt: string): Promise<VisionResult> => {
+export const model2vision = async (
+    model: AiModel,
+    mimetype: string,
+    base64: string,
+    prompt: string,
+    geminiModel?: string,
+): Promise<VisionResult> => {
     const content = `${strict}\n${prompt}`
 
     if (model === 'GPT' && process.env.OPENAI_API_KEY) {
@@ -175,7 +181,7 @@ export const model2vision = async (model: AiModel, mimetype: string, base64: str
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 const r = await callGemini({
-                    model: 'gemini-2.5-flash-lite',
+                    model: geminiModel ?? 'gemini-2.5-flash-lite',
                     // Vertex AI requires role-tagged messages; AI Studio was
                     // lenient with bare { parts: [...] }. Always wrap.
                     contents: [{

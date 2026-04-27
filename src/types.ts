@@ -57,11 +57,21 @@ export interface MultiPartConfig {
 
 export type ModelArg = 'claude' | 'gpt5' | 'gemini'
 
+/** Per-phase Gemini model overrides. Only consulted on the GEMINI route. */
+export interface GeminiModels {
+  /** Classification call (split-model mode). E.g. `'gemini-2.5-pro'`. */
+  classify?: string
+  /** Field-extraction call. E.g. `'gemini-2.5-flash-lite'` (default). */
+  extract?: string
+}
+
 export interface ExtractionDocument {
   doc_type_id: string | null
   label: string | null
   data: object
   docdate: string | null
+  /** Self-reported classifier confidence (0.0-1.0). Absent for forced-doctype. */
+  confidence?: number
   start?: number
   end?: number
   partId?: string

@@ -1,6 +1,6 @@
 export { D as DocProcessorLogger, c as configure } from './config-CySXFcye.mjs';
-import { M as ModelArg, E as ExtractionResult, G as GroundedResult, C as CompositeCedulaResult, a as CedulaFile, b as MergedCedula } from './types-B9rebU9p.mjs';
-export { A as AIUsage, c as ExtractionDocument } from './types-B9rebU9p.mjs';
+import { M as ModelArg, G as GeminiModels, E as ExtractionResult, a as GroundedResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-BXLXofc-.mjs';
+export { A as AIUsage, d as ExtractionDocument } from './types-BXLXofc-.mjs';
 
 /**
  * OCR and Document Field Extraction
@@ -46,6 +46,7 @@ declare function detectCedulaSide(buffer: Buffer, mimetype: string, model?: Mode
 }>;
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
     skipFace?: boolean;
+    geminiModels?: GeminiModels;
 }): Promise<ExtractionResult>;
 
 /**

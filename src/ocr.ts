@@ -26,7 +26,7 @@ import { PDFDocument } from 'pdf-lib'
 import { extractFace } from './faceextract'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
-import type { ModelArg, ExtractionResult, AIUsage } from './types'
+import type { ModelArg, ExtractionResult, AIUsage, GeminiModels } from './types'
 
 /** Accumulate token usage across multiple AI calls */
 function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
@@ -40,7 +40,11 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-const PROMPT_TEMPLATE_VERSION = 'v5'
+// v6: classifier prompts request a self-reported `confidence` field (0.0-1.0) and the
+// host can opt into split-model mode (`gemini-2.5-pro` for classify, `flash-lite` for
+// extract). The bump invalidates every `flash-lite`-era cache entry that has no
+// confidence and may carry the misclassifications that motivated split-model.
+const PROMPT_TEMPLATE_VERSION = 'v6'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -253,7 +257,7 @@ export function parseRawDocs(text: string): any[] {
 /** Normalize a single raw doc entry from AI response */
 export function normalizeDoc(d: any) {
     const id = d?.id || d?.doctypeid || null
-    const META_KEYS = new Set(['id', 'doctypeid', 'doc_type_id', 'data', 'docdate', 'document_date', 'documentDate', 'start', 'end', 'partId', 'part_id', 'partid', 'label'])
+    const META_KEYS = new Set(['id', 'doctypeid', 'doc_type_id', 'data', 'docdate', 'document_date', 'documentDate', 'confidence', 'start', 'end', 'partId', 'part_id', 'partid', 'label'])
     const flatData = Object.fromEntries(Object.entries(d || {}).filter(([k]) => !META_KEYS.has(k)))
     const data = d?.data && typeof d.data === 'object' ? d.data : Object.keys(flatData).length > 0 ? flatData : {}
     const rawDate = d?.docdate || d?.document_date || d?.documentDate || null
@@ -262,14 +266,16 @@ export function normalizeDoc(d: any) {
     const start = Number.isFinite(d?.start) ? Number(d.start) : (d?.start ? parseInt(d.start, 10) : undefined)
     const end = Number.isFinite(d?.end) ? Number(d.end) : (d?.end ? parseInt(d.end, 10) : undefined)
     const partId = d?.partId || d?.part_id || d?.partid || undefined
-    return { id, data, docdate, start, end, partId }
+    const confidence = typeof d?.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : undefined
+    return { id, data, docdate, start, end, partId, confidence }
 }
 
 // ─── Pass 0: Detect document boundaries in multi-doc PDFs ───────────────────
 
 async function detectDocumentBoundaries(
     base64: string, model: AiModel, totalPages: number,
-    usageAccum?: AIUsage
+    usageAccum?: AIUsage,
+    geminiModel?: string,
 ): Promise<Array<{ start: number; end: number }>> {
     const prompt = `Este PDF tiene ${totalPages} páginas y puede contener múltiples documentos combinados.
 Identifica los límites de cada documento separado dentro del PDF.
@@ -280,7 +286,7 @@ Devuelve JSON: {"documents":[{"start":1,"end":3},{"start":4,"end":4},{"start":5,
 - Si todo el PDF es un solo documento, devuelve [{"start":1,"end":${totalPages}}]
 - Solo JSON, sin markdown`
 
-    const vr = await model2vision(model, 'application/pdf', base64, prompt)
+    const vr = await model2vision(model, 'application/pdf', base64, prompt, geminiModel)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     const parsed = parseRawDocs(vr.text)
 
@@ -299,8 +305,9 @@ Devuelve JSON: {"documents":[{"start":1,"end":3},{"start":4,"end":4},{"start":5,
 async function classifyDocument(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
-    usageAccum?: AIUsage
-): Promise<Array<{ id: string; start?: number; end?: number; partId?: string }>> {
+    usageAccum?: AIUsage,
+    geminiModel?: string,
+): Promise<Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number }>> {
     const typeList = doctypes.map(dt => {
         const base = `• ${dt.id}: ${dt.definition || dt.label}`
         if (!dt.fieldDefs?.length) return base
@@ -314,18 +321,19 @@ async function classifyDocument(
 
     const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Devuelve JSON: {"documents":[{"id":"tipo-id"${isPDF ? ',"start":1,"end":1' : ''},"partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ''},"partId":"front|back"}]}
 ${isPDF
     ? `"start"/"end": páginas 1-indexed. Si un tipo aparece múltiples veces (ej: varias liquidaciones), devuelve uno por instancia con su rango de páginas. Páginas que no correspondan a ningún tipo listado deben ignorarse.
 Si una página contiene AMBAS caras de una cédula (frente y reverso), devuelve DOS elementos con la misma página y diferente partId.`
     : `Si la imagen contiene AMBAS caras de una cédula (frente y reverso apilados), devuelve DOS elementos. Para otro documento, devuelve uno solo.`
 }
 "partId": solo para cédula-identidad. Frente tiene foto/RUT/nombre. Reverso tiene firma/huella/profesión.
+"confidence": 0.0-1.0, qué tan seguro estás del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - Si no estás seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 Tipos válidos:
 ${typeList}`
 
-    const vr = await model2vision(model, mimetype, base64, prompt)
+    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     const rawDocs = parseRawDocs(vr.text)
 
@@ -334,7 +342,14 @@ ${typeList}`
         const start = Number.isFinite(d?.start) ? Number(d.start) : (d?.start ? parseInt(d.start, 10) : undefined)
         const end = Number.isFinite(d?.end) ? Number(d.end) : (d?.end ? parseInt(d.end, 10) : undefined)
         const partId = d?.partId || d?.part_id || d?.partid || undefined
-        return { id, ...(Number.isFinite(start) ? { start } : {}), ...(Number.isFinite(end) ? { end } : {}), ...(partId ? { partId } : {}) }
+        const confidence = typeof d?.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : undefined
+        return {
+            id,
+            ...(Number.isFinite(start) ? { start } : {}),
+            ...(Number.isFinite(end) ? { end } : {}),
+            ...(partId ? { partId } : {}),
+            ...(confidence !== undefined ? { confidence } : {}),
+        }
     }).filter((d: any) => d.id)
 }
 
@@ -343,7 +358,8 @@ ${typeList}`
 async function classifyAndExtractImage(
     base64: string, mimetype: string, model: AiModel,
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs: any[] }>,
-    usageAccum?: AIUsage
+    usageAccum?: AIUsage,
+    geminiModel?: string,
 ): Promise<any[]> {
     const typeList = doctypes.map(dt => {
         const fields = JSON.stringify(dt.fieldDefs.map((f: any) => {
@@ -358,7 +374,8 @@ async function classifyAndExtractImage(
 Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
 Si la imagen contiene AMBAS caras de una cédula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
 Para cédula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
-Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0,"data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
+- "confidence": 0.0-1.0, qué tan seguro estás del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - "docdate": la fecha a la que CORRESPONDE la información, NO cuándo fue emitido o descargado. Ej: liquidación de junio 2025 emitida el 25 mayo → 2025-06-01. Resumen anual 2024 → 2024-01-01. Para certificados sin período (cédula, nacimiento, matrimonio), usar la fecha de emisión. Formato YYYY-MM-DD
 - "partId": solo para cédula-identidad
 - Campos type:"num": devuelve número entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
@@ -368,7 +385,7 @@ Devuelve JSON: {"documents":[{"id":"tipo-id","data":{...},"docdate":"YYYY-MM-DD"
 Tipos válidos:
 ${typeList}`
 
-    const vr = await model2vision(model, mimetype, base64, prompt)
+    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     return parseRawDocs(vr.text)
 }
@@ -379,7 +396,8 @@ async function extractFields(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
     docTypeId: string, doctype: any,
     entries: Array<{ start?: number; end?: number; partId?: string }>,
-    usageAccum?: AIUsage
+    usageAccum?: AIUsage,
+    geminiModel?: string,
 ): Promise<any[]> {
     const fields = JSON.stringify(doctype.fieldDefs.map((f: any) => {
         const entry: any = { key: f.key, type: f.type }
@@ -410,7 +428,7 @@ ${cedulaBbox}
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`
 
-    const vr = await model2vision(model, mimetype, base64, prompt)
+    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     return parseRawDocs(vr.text)
 }
@@ -422,7 +440,7 @@ export async function Doc2Fields(
     mimetype: string,
     model: ModelArg = 'gemini',
     forcedDoctypeId?: string,
-    options?: { skipFace?: boolean }
+    options?: { skipFace?: boolean; geminiModels?: GeminiModels }
 ): Promise<ExtractionResult> {
     const isImage = mimetype.startsWith('image/')
     const isPDF = mimetype === 'application/pdf'
@@ -433,16 +451,69 @@ export async function Doc2Fields(
     const aiModel = toAiModel(model)
     const usage: AIUsage = {}
 
+    // Per-phase model overrides (Gemini route only). When `classify` is set,
+    // the image path uses split-mode (classify call + extract call) instead of
+    // the single-pass `classifyAndExtractImage`. PDFs already split, so we
+    // just route each call to the right model.
+    const classifyGeminiModel = options?.geminiModels?.classify
+    const extractGeminiModel = options?.geminiModels?.extract
+
     let allRawDocs: any[]
 
     if (forcedDoctypeId) {
         const doctype = mapById[forcedDoctypeId]
         if (!doctype) return { documents: [] }
-        allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage)
+        allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage, extractGeminiModel)
     } else if (isImage) {
-        allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage)
+        if (classifyGeminiModel) {
+            // Split-model path: stronger classifier, cheap extractor.
+            const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel)
+            if (classified.length === 0) return { documents: [] }
+
+            const byType = new Map<string, Array<{ partId?: string; confidence?: number }>>()
+            for (const c of classified) {
+                const list = byType.get(c.id) || []
+                list.push({ partId: c.partId, confidence: c.confidence })
+                byType.set(c.id, list)
+            }
+
+            const extractionResults = await Promise.all(
+                Array.from(byType.entries()).map(async ([typeId, entries]) => {
+                    const dt = mapById[typeId]
+                    if (!dt) return { typeId, results: [] as any[] }
+                    const results = await extractFields(
+                        base64, mimetype, aiModel, false, typeId, dt,
+                        entries.map(e => ({ partId: e.partId })),
+                        usage,
+                        extractGeminiModel,
+                    )
+                    return { typeId, results }
+                })
+            )
+            const extractedByType = new Map<string, any[]>()
+            for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results)
+
+            allRawDocs = []
+            for (const [typeId, classEntries] of byType) {
+                if (!mapById[typeId]) continue
+                const ext = extractedByType.get(typeId) || []
+                for (let i = 0; i < classEntries.length; i++) {
+                    const cls = classEntries[i]
+                    const e = i < ext.length ? normalizeDoc(ext[i]) : null
+                    allRawDocs.push({
+                        id: typeId,
+                        data: e?.data || {},
+                        docdate: e?.docdate || null,
+                        ...(cls.confidence !== undefined ? { confidence: cls.confidence } : {}),
+                        ...(cls.partId ? { partId: cls.partId } : {}),
+                    })
+                }
+            }
+        } else {
+            allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage, extractGeminiModel)
+        }
     } else {
-        let classified: Array<{ id: string; start?: number; end?: number; partId?: string }>
+        let classified: Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number }>
 
         let totalPages = 0
         let pdfDoc: PDFDocument | null = null
@@ -455,29 +526,33 @@ export async function Doc2Fields(
                 // with the same doctype into document ranges.
                 // This avoids context bias where a Maat informe comercial page
                 // gets misclassified as informe-deuda when grouped with debt pages.
-                const perPage: Array<{ id: string; page: number; partId?: string }> = []
+                const perPage: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
                 for (let p = 1; p <= totalPages; p++) {
                     const out = await PDFDocument.create()
                     const [copied] = await out.copyPages(pdfDoc, [p - 1])
                     out.addPage(copied)
                     const pageBase64 = Buffer.from(await out.save()).toString('base64')
 
-                    const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage)
+                    const pageClassified = await classifyDocument(pageBase64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel)
                     for (const c of pageClassified) {
-                        perPage.push({ id: c.id, page: p, partId: c.partId })
+                        perPage.push({ id: c.id, page: p, partId: c.partId, confidence: c.confidence })
                     }
                 }
 
-                // Merge adjacent pages with the same doctype into ranges
+                // Merge adjacent pages with the same doctype into ranges. Track
+                // the minimum per-page confidence across the merged span so a
+                // single low-confidence page in a multi-page block keeps the
+                // whole range below threshold.
                 classified = []
                 for (let i = 0; i < perPage.length; i++) {
                     const entry = perPage[i]
                     // Cédula entries have partId and shouldn't be merged
                     if (entry.partId) {
-                        classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId })
+                        classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
                         continue
                     }
                     let end = entry.page
+                    let minConf = entry.confidence
                     while (
                         i + 1 < perPage.length &&
                         perPage[i + 1].id === entry.id &&
@@ -485,15 +560,17 @@ export async function Doc2Fields(
                         perPage[i + 1].page === end + 1
                     ) {
                         end = perPage[i + 1].page
+                        const next = perPage[i + 1].confidence
+                        if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
                         i++
                     }
-                    classified.push({ id: entry.id, start: entry.page, end })
+                    classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
                 }
             } else {
-                classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage)
+                classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel)
             }
         } catch {
-            classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage)
+            classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel)
         }
 
         if (classified.length === 0) {
@@ -567,7 +644,7 @@ export async function Doc2Fields(
                     const subDoctypes = doctypes.filter(dt => containedIds.has(dt.id))
                     if (subDoctypes.length > 0) {
                         const subClassified = await classifyDocument(
-                            base64, mimetype, aiModel, isPDF, subDoctypes, usage
+                            base64, mimetype, aiModel, isPDF, subDoctypes, usage, classifyGeminiModel
                         )
                         for (const sub of subClassified) {
                             classified.push(sub)
@@ -575,17 +652,20 @@ export async function Doc2Fields(
                     }
                 }
 
-                // Ensure a single container entry spans all pages
+                // Ensure a single container entry spans all pages. Carry over
+                // the original container's confidence (if any) so downstream
+                // gating still applies to the container slot.
+                const prior = classified.find(c => c.id === containerId)
                 classified = classified.filter(c => c.id !== containerId)
-                classified.unshift({ id: containerId, start: 1, end: totalPages })
+                classified.unshift({ id: containerId, start: 1, end: totalPages, ...(prior?.confidence !== undefined ? { confidence: prior.confidence } : {}) })
             }
         }
 
-        // Group by doc type for Pass 2
-        const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string }>>()
+        // Group by doc type for Pass 2 — keep confidence alongside each entry.
+        const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string; confidence?: number }>>()
         for (const c of classified) {
             const existing = byType.get(c.id) || []
-            existing.push({ start: c.start, end: c.end, partId: c.partId })
+            existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence })
             byType.set(c.id, existing)
         }
 
@@ -628,12 +708,12 @@ export async function Doc2Fields(
             if (adjustedEntries.length > MAX_PER_BATCH) {
                 for (let i = 0; i < adjustedEntries.length; i += MAX_PER_BATCH) {
                     extractionPromises.push(
-                        extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage)
+                        extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries.slice(i, i + MAX_PER_BATCH), usage, extractGeminiModel)
                     )
                 }
             } else {
                 extractionPromises.push(
-                    extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage)
+                    extractFields(extractBase64, mimetype, aiModel, isPDF, docTypeId, doctype, adjustedEntries, usage, extractGeminiModel)
                 )
             }
         }
@@ -663,11 +743,15 @@ export async function Doc2Fields(
                 // If extraction returned more docs than classified (e.g. one
                 // merged range contained multiple annual instances), prefer
                 // the extracted results since they have finer page ranges.
+                // The confidence comes from the classifier, so all the split
+                // sub-docs inherit the minimum confidence of the parent range.
                 if (sortedExtracted.length > sortedClass.length && sortedClass.length > 0) {
                     const classRange = {
                         start: Math.min(...sortedClass.map(c => c.start ?? 0)),
                         end: Math.max(...sortedClass.map(c => c.end ?? 0)),
                     }
+                    const classConfidences = sortedClass.map(c => c.confidence).filter((v): v is number => v !== undefined)
+                    const minConf = classConfidences.length > 0 ? Math.min(...classConfidences) : undefined
                     for (const ext of sortedExtracted) {
                         const start = ext.start ?? classRange.start
                         const end = ext.end ?? start
@@ -675,6 +759,7 @@ export async function Doc2Fields(
                             id: typeId,
                             data: ext.data || {},
                             docdate: ext.docdate || null,
+                            ...(minConf !== undefined ? { confidence: minConf } : {}),
                             start,
                             end,
                         })
@@ -688,6 +773,7 @@ export async function Doc2Fields(
                             id: typeId,
                             data: ext?.data || {},
                             docdate: ext?.docdate || null,
+                            ...(cls.confidence !== undefined ? { confidence: cls.confidence } : {}),
                             start: cls.start,
                             end: cls.end,
                             ...(cls.partId ? { partId: cls.partId } : {}),
@@ -702,7 +788,7 @@ export async function Doc2Fields(
     const skipFace = options?.skipFace === true
     const documents = await Promise.all(allRawDocs.map(async (d: any) => {
         const normalized = normalizeDoc(d)
-        const { id, data, start, end } = normalized
+        const { id, data, start, end, confidence } = normalized
         let partId = normalized.partId
         let docdate = normalized.docdate
 
@@ -749,6 +835,7 @@ export async function Doc2Fields(
             label: id ? mapById?.[id]?.label || null : null,
             data,
             docdate,
+            ...(confidence !== undefined ? { confidence } : {}),
             ...(Number.isFinite(start) ? { start } : {}),
             ...(Number.isFinite(end) ? { end } : {}),
             ...(partId ? { partId } : {}),

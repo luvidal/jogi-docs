@@ -45,11 +45,20 @@ interface MultiPartConfig {
     }>;
 }
 type ModelArg = 'claude' | 'gpt5' | 'gemini';
+/** Per-phase Gemini model overrides. Only consulted on the GEMINI route. */
+interface GeminiModels {
+    /** Classification call (split-model mode). E.g. `'gemini-2.5-pro'`. */
+    classify?: string;
+    /** Field-extraction call. E.g. `'gemini-2.5-flash-lite'` (default). */
+    extract?: string;
+}
 interface ExtractionDocument {
     doc_type_id: string | null;
     label: string | null;
     data: object;
     docdate: string | null;
+    /** Self-reported classifier confidence (0.0-1.0). Absent for forced-doctype. */
+    confidence?: number;
     start?: number;
     end?: number;
     partId?: string;
@@ -89,4 +98,4 @@ interface MergedCedula {
     foto_base64: string | null;
 }
 
-export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, CedulaFile as a, MergedCedula as b, ExtractionDocument as c, Doctype as d, DoctypeField as e, DoctypesMap as f, DocRequirement as g, MultiPartConfig as h };
+export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GeminiModels as G, HowToObtain as H, ModelArg as M, GroundedResult as a, CedulaFile as b, MergedCedula as c, ExtractionDocument as d, Doctype as e, DoctypeField as f, DoctypesMap as g, DocRequirement as h, MultiPartConfig as i };
