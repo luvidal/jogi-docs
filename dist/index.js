@@ -151,7 +151,7 @@ var init_ai = __esm({
         usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
       };
     };
-    model2vision = async (model, mimetype, base64, prompt, geminiModel) => {
+    model2vision = async (model, mimetype, base64, prompt, geminiModel, responseSchema) => {
       const content = `${strict}
 ${prompt}`;
       if (model === "GPT" && process.env.OPENAI_API_KEY) {
@@ -197,7 +197,8 @@ ${prompt}`;
               config: {
                 temperature: 0,
                 maxOutputTokens: 8192,
-                responseMimeType: "application/json"
+                responseMimeType: "application/json",
+                ...responseSchema ? { responseSchema } : {}
               }
             });
             const um = r?.usageMetadata;
@@ -429,6 +430,7 @@ var ocr_exports = {};
 __export(ocr_exports, {
   Doc2Fields: () => Doc2Fields,
   buildCacheKey: () => buildCacheKey,
+  buildClassifyResponseSchema: () => buildClassifyResponseSchema,
   detectCedulaSide: () => detectCedulaSide,
   extractPdfPageAsImage: () => extractPdfPageAsImage,
   getPromptVersion: () => getPromptVersion,
@@ -625,6 +627,31 @@ function normalizeDoc(d) {
   const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
   return { id, data, docdate, start, end, partId, confidence };
 }
+function buildClassifyResponseSchema(doctypeIds, isPDF) {
+  const documentProps = {
+    id: { type: "STRING", enum: doctypeIds },
+    confidence: { type: "NUMBER", minimum: 0, maximum: 1 },
+    partId: { type: "STRING", enum: ["front", "back"], nullable: true }
+  };
+  if (isPDF) {
+    documentProps.start = { type: "INTEGER", minimum: 1 };
+    documentProps.end = { type: "INTEGER", minimum: 1 };
+  }
+  return {
+    type: "OBJECT",
+    properties: {
+      documents: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: documentProps,
+          required: isPDF ? ["id", "confidence", "start", "end"] : ["id", "confidence"]
+        }
+      }
+    },
+    required: ["documents"]
+  };
+}
 async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum, geminiModel) {
   const typeList = doctypes.map((dt) => {
     const base = `\u2022 ${dt.id}: ${dt.definition || dt.label}`;
@@ -647,7 +674,8 @@ Si una p\xE1gina contiene AMBAS caras de una c\xE9dula (frente y reverso), devue
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
 Tipos v\xE1lidos:
 ${typeList}`;
-  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
+  const schema = buildClassifyResponseSchema(doctypes.map((d) => d.id), isPDF);
+  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema);
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   const rawDocs = parseRawDocs(vr.text);
   return rawDocs.map((d) => {
@@ -1104,7 +1132,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v6";
+    PROMPT_TEMPLATE_VERSION = "v7";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
@@ -1500,6 +1528,7 @@ async function generateThumbnailFromPdf(buffer) {
 
 exports.Doc2Fields = Doc2Fields;
 exports.buildCacheKey = buildCacheKey;
+exports.buildClassifyResponseSchema = buildClassifyResponseSchema;
 exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
 exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;

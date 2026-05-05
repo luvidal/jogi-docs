@@ -1,6 +1,16 @@
 export { D as DocProcessorLogger, c as configure } from './config-CySXFcye.js';
-import { M as ModelArg, G as GeminiModels, E as ExtractionResult, a as GroundedResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-BXLXofc-.js';
-export { A as AIUsage, d as ExtractionDocument } from './types-BXLXofc-.js';
+import { G as GroundedResult, M as ModelArg, a as GeminiModels, E as ExtractionResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-CwVLKDEN.js';
+export { A as AIUsage, d as ExtractionDocument } from './types-CwVLKDEN.js';
+
+type ResponseSchema = Record<string, unknown>;
+/**
+ * Query Gemini with Google Search grounding enabled.
+ * Used for derived fields that need real-world data (e.g., market prices).
+ * Returns raw text response — caller is responsible for parsing.
+ */
+declare const queryGrounded: (prompt: string, options?: {
+    model?: string;
+}) => Promise<GroundedResult>;
 
 /**
  * OCR and Document Field Extraction
@@ -44,19 +54,25 @@ declare function detectCedulaSide(buffer: Buffer, mimetype: string, model?: Mode
     confidence: number;
     data?: object;
 }>;
+/**
+ * Build the Gemini `responseSchema` (Phase 1, shape only) for the multi-page classifier.
+ *
+ * - `id` is an enum over the candidate doctype list. Cuts off-list hallucinations at
+ *   the model boundary instead of in `parseRawDocs`.
+ * - `start` / `end` are integers (PDF only — single-image classify omits page ranges).
+ * - `confidence` is a required number in `[0,1]` so downstream destructive-op gates
+ *   always have a value to act on.
+ * - `partId` is `front | back` and only emitted for multipart doctypes.
+ *
+ * Per-doctype `data` object schemas are NOT included — that's Phase 2 (Step 8b in the
+ * jogi `docs/plans/ocr-refactor.md`). The app still independently validates page
+ * coverage, overlaps, request authorization, and per-doctype sanity.
+ */
+declare function buildClassifyResponseSchema(doctypeIds: string[], isPDF: boolean): ResponseSchema;
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
     skipFace?: boolean;
     geminiModels?: GeminiModels;
 }): Promise<ExtractionResult>;
-
-/**
- * Query Gemini with Google Search grounding enabled.
- * Used for derived fields that need real-world data (e.g., market prices).
- * Returns raw text response — caller is responsible for parsing.
- */
-declare const queryGrounded: (prompt: string, options?: {
-    model?: string;
-}) => Promise<GroundedResult>;
 
 /**
  * V1 Composite Cedula Detection — Pixel Heuristics (SUPERSEDED by V3)
@@ -185,4 +201,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };

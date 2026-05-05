@@ -5,7 +5,7 @@ export { configure } from './config'
 export type { DocProcessorLogger } from './config'
 
 // OCR / Extraction
-export { Doc2Fields, detectCedulaSide, extractPdfPageAsImage, getPromptVersion, buildCacheKey } from './ocr'
+export { Doc2Fields, detectCedulaSide, extractPdfPageAsImage, getPromptVersion, buildCacheKey, buildClassifyResponseSchema } from './ocr'
 
 // Grounded AI queries (for derived fields)
 export { queryGrounded } from './ai'

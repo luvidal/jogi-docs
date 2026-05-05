@@ -1,6 +1,9 @@
 import type { AIUsage, GroundedResult, ModelArg } from './types'
 import { getGeminiCall } from './config'
 
+// Re-exported by ai.ts so callers can build schemas without importing @google/genai directly.
+export type ResponseSchema = Record<string, unknown>
+
 /**
  * True when *something* can service a Gemini call: either a host-provided
  * gate (e.g. Jogi routing through Vertex AI) or a local API key. Used by the
@@ -143,6 +146,7 @@ export const model2vision = async (
     base64: string,
     prompt: string,
     geminiModel?: string,
+    responseSchema?: ResponseSchema,
 ): Promise<VisionResult> => {
     const content = `${strict}\n${prompt}`
 
@@ -194,7 +198,8 @@ export const model2vision = async (
                     config: {
                         temperature: 0,
                         maxOutputTokens: 8192,
-                        responseMimeType: 'application/json'
+                        responseMimeType: 'application/json',
+                        ...(responseSchema ? { responseSchema } : {}),
                     } as any,
                 })
                 const um = r?.usageMetadata

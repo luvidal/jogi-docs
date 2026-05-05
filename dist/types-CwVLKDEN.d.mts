@@ -98,4 +98,4 @@ interface MergedCedula {
     foto_base64: string | null;
 }
 
-export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GeminiModels as G, HowToObtain as H, ModelArg as M, GroundedResult as a, CedulaFile as b, MergedCedula as c, ExtractionDocument as d, Doctype as e, DoctypeField as f, DoctypesMap as g, DocRequirement as h, MultiPartConfig as i };
+export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, GeminiModels as a, CedulaFile as b, MergedCedula as c, ExtractionDocument as d, Doctype as e, DoctypeField as f, DoctypesMap as g, DocRequirement as h, MultiPartConfig as i };

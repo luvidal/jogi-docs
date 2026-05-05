@@ -19,7 +19,7 @@
  */
 
 import { model2vision, toAiModel, stripFences } from './ai'
-import type { VisionResult, AiModel } from './ai'
+import type { VisionResult, AiModel, ResponseSchema } from './ai'
 import { getDoctypes, getDoctypesMap } from './doctypes'
 import { getLogger } from './config'
 import { PDFDocument } from 'pdf-lib'
@@ -40,11 +40,13 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
 // Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
-// v6: classifier prompts request a self-reported `confidence` field (0.0-1.0) and the
-// host can opt into split-model mode (`gemini-2.5-pro` for classify, `flash-lite` for
-// extract). The bump invalidates every `flash-lite`-era cache entry that has no
-// confidence and may carry the misclassifications that motivated split-model.
-const PROMPT_TEMPLATE_VERSION = 'v6'
+// v7: classifier multi-page branch is now schema-enforced via Gemini `responseSchema`
+// (Phase 1, shape only — `id` enum over known doctypes, `start`/`end` integers,
+// required `confidence` 0–1, `partId` enum on multipart entries). Containers still
+// return parent + children as flat entries. Per-doctype `data` schemas come in Phase 2.
+// The bump invalidates v6 cache entries whose payload may carry off-shape ids or
+// missing confidence values.
+const PROMPT_TEMPLATE_VERSION = 'v7'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -302,6 +304,49 @@ Devuelve JSON: {"documents":[{"start":1,"end":3},{"start":4,"end":4},{"start":5,
 
 // ─── Pass 1: Classify ────────────────────────────────────────────────────────
 
+/**
+ * Build the Gemini `responseSchema` (Phase 1, shape only) for the multi-page classifier.
+ *
+ * - `id` is an enum over the candidate doctype list. Cuts off-list hallucinations at
+ *   the model boundary instead of in `parseRawDocs`.
+ * - `start` / `end` are integers (PDF only — single-image classify omits page ranges).
+ * - `confidence` is a required number in `[0,1]` so downstream destructive-op gates
+ *   always have a value to act on.
+ * - `partId` is `front | back` and only emitted for multipart doctypes.
+ *
+ * Per-doctype `data` object schemas are NOT included — that's Phase 2 (Step 8b in the
+ * jogi `docs/plans/ocr-refactor.md`). The app still independently validates page
+ * coverage, overlaps, request authorization, and per-doctype sanity.
+ */
+export function buildClassifyResponseSchema(
+    doctypeIds: string[],
+    isPDF: boolean,
+): ResponseSchema {
+    const documentProps: Record<string, unknown> = {
+        id: { type: 'STRING', enum: doctypeIds },
+        confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
+        partId: { type: 'STRING', enum: ['front', 'back'], nullable: true },
+    }
+    if (isPDF) {
+        documentProps.start = { type: 'INTEGER', minimum: 1 }
+        documentProps.end = { type: 'INTEGER', minimum: 1 }
+    }
+    return {
+        type: 'OBJECT',
+        properties: {
+            documents: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: documentProps,
+                    required: isPDF ? ['id', 'confidence', 'start', 'end'] : ['id', 'confidence'],
+                },
+            },
+        },
+        required: ['documents'],
+    }
+}
+
 async function classifyDocument(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
@@ -333,7 +378,13 @@ Si una página contiene AMBAS caras de una cédula (frente y reverso), devuelve 
 Tipos válidos:
 ${typeList}`
 
-    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
+    // Schema-enforced output (Phase 1, shape only). Only the multi-page PDF
+    // route benefits today — single-image / single-PDF-page classify paths
+    // route through `model2vision` without a schema so existing behavior is
+    // preserved for unaudited callers.
+    const schema = buildClassifyResponseSchema(doctypes.map(d => d.id), isPDF)
+
+    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     const rawDocs = parseRawDocs(vr.text)
 
