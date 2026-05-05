@@ -750,7 +750,9 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const isImage = mimetype.startsWith("image/");
   const isPDF = mimetype === "application/pdf";
   if (!isImage && !isPDF) throw new Error("Images and PDFs only");
-  const { doctypes, mapById } = loadSchemas();
+  const { doctypes: fullDoctypes, mapById } = loadSchemas();
+  const narrow = Array.isArray(options?.allowedDoctypeIds) && options.allowedDoctypeIds.length > 0;
+  const doctypes = narrow ? fullDoctypes.filter((dt) => options.allowedDoctypeIds.includes(dt.id)) : fullDoctypes;
   const base64 = buffer.toString("base64");
   const aiModel = toAiModel(model);
   const usage = {};
@@ -1132,7 +1134,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v7";
+    PROMPT_TEMPLATE_VERSION = "v8";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {

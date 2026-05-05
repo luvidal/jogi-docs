@@ -1,6 +1,6 @@
 export { D as DocProcessorLogger, c as configure } from './config-CySXFcye.js';
-import { G as GroundedResult, M as ModelArg, a as GeminiModels, E as ExtractionResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-CwVLKDEN.js';
-export { A as AIUsage, d as ExtractionDocument } from './types-CwVLKDEN.js';
+import { G as GroundedResult, M as ModelArg, a as GeminiModels, A as AllowedDoctypeIds, E as ExtractionResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-zUlJrZ5k.js';
+export { d as AIUsage, e as ExtractionDocument } from './types-zUlJrZ5k.js';
 
 type ResponseSchema = Record<string, unknown>;
 /**
@@ -72,6 +72,7 @@ declare function buildClassifyResponseSchema(doctypeIds: string[], isPDF: boolea
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
     skipFace?: boolean;
     geminiModels?: GeminiModels;
+    allowedDoctypeIds?: AllowedDoctypeIds;
 }): Promise<ExtractionResult>;
 
 /**
@@ -201,4 +202,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };

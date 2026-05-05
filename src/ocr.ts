@@ -26,7 +26,7 @@ import { PDFDocument } from 'pdf-lib'
 import { extractFace } from './faceextract'
 import sharp from 'sharp'
 import { createHash } from 'crypto'
-import type { ModelArg, ExtractionResult, AIUsage, GeminiModels } from './types'
+import type { ModelArg, ExtractionResult, AIUsage, GeminiModels, AllowedDoctypeIds } from './types'
 
 /** Accumulate token usage across multiple AI calls */
 function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
@@ -46,7 +46,14 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // return parent + children as flat entries. Per-doctype `data` schemas come in Phase 2.
 // The bump invalidates v6 cache entries whose payload may carry off-shape ids or
 // missing confidence values.
-const PROMPT_TEMPLATE_VERSION = 'v7'
+// v8: classifier accepts an optional `allowedDoctypeIds` candidate-doctype enum
+// override (Phase 7a — request-context narrowing). When set, the schema enum
+// and prompt type-list are restricted to that subset, so the model can't return
+// off-list doctypes for the upload's request scope. Container fallback (Phase
+// 7b) reuses the same mechanism with `parent.contains` as the candidate set.
+// Cache entries are not affected by the option itself; the Jogi-side cache key
+// folds the candidate set so narrowed and full-catalog calls don't collide.
+const PROMPT_TEMPLATE_VERSION = 'v8'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -491,13 +498,26 @@ export async function Doc2Fields(
     mimetype: string,
     model: ModelArg = 'gemini',
     forcedDoctypeId?: string,
-    options?: { skipFace?: boolean; geminiModels?: GeminiModels }
+    options?: { skipFace?: boolean; geminiModels?: GeminiModels; allowedDoctypeIds?: AllowedDoctypeIds }
 ): Promise<ExtractionResult> {
     const isImage = mimetype.startsWith('image/')
     const isPDF = mimetype === 'application/pdf'
     if (!isImage && !isPDF) throw new Error('Images and PDFs only')
 
-    const { doctypes, mapById } = loadSchemas()
+    const { doctypes: fullDoctypes, mapById } = loadSchemas()
+
+    // Phase 7a: when the host passes a non-empty `allowedDoctypeIds`, restrict
+    // the classifier's candidate set to that subset. The schema enum, the
+    // prompt type-list, and the container-fallback `subDoctypes` are all derived
+    // from `doctypes` below — narrowing here flows through every classify call
+    // in this Doc2Fields invocation. An empty array is treated as "no narrowing"
+    // (defensive: an over-eager caller passing `[]` shouldn't cripple the call).
+    // Forced-doctype path is unaffected — it bypasses classify entirely.
+    const narrow = Array.isArray(options?.allowedDoctypeIds) && options!.allowedDoctypeIds!.length > 0
+    const doctypes = narrow
+        ? fullDoctypes.filter(dt => options!.allowedDoctypeIds!.includes(dt.id))
+        : fullDoctypes
+
     const base64 = buffer.toString('base64')
     const aiModel = toAiModel(model)
     const usage: AIUsage = {}

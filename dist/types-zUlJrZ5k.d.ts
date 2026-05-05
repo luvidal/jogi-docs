@@ -52,6 +52,19 @@ interface GeminiModels {
     /** Field-extraction call. E.g. `'gemini-2.5-flash-lite'` (default). */
     extract?: string;
 }
+/**
+ * Optional candidate doctype set for the classifier (Phase 7a — request-context
+ * narrowing). When provided and non-empty, the multi-page / single-page classify
+ * `responseSchema` enum is restricted to these ids — the model can only return
+ * doctypes from this list. Forced-doctype path is unaffected (the forced id
+ * always wins; no classification happens). When omitted or empty, the classifier
+ * sees the full doctype catalog (unchanged legacy behavior).
+ *
+ * Multipart `partId` is a property of a doctype, not a separate doctype, so it
+ * does not enter this set. Container narrowing (Phase 7b) reuses the same
+ * mechanism with `parent.contains` as the candidate set.
+ */
+type AllowedDoctypeIds = string[];
 interface ExtractionDocument {
     doc_type_id: string | null;
     label: string | null;
@@ -98,4 +111,4 @@ interface MergedCedula {
     foto_base64: string | null;
 }
 
-export type { AIUsage as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, GeminiModels as a, CedulaFile as b, MergedCedula as c, ExtractionDocument as d, Doctype as e, DoctypeField as f, DoctypesMap as g, DocRequirement as h, MultiPartConfig as i };
+export type { AllowedDoctypeIds as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, GeminiModels as a, CedulaFile as b, MergedCedula as c, AIUsage as d, ExtractionDocument as e, Doctype as f, DoctypeField as g, DoctypesMap as h, DocRequirement as i, MultiPartConfig as j };

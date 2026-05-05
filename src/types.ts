@@ -65,6 +65,20 @@ export interface GeminiModels {
   extract?: string
 }
 
+/**
+ * Optional candidate doctype set for the classifier (Phase 7a — request-context
+ * narrowing). When provided and non-empty, the multi-page / single-page classify
+ * `responseSchema` enum is restricted to these ids — the model can only return
+ * doctypes from this list. Forced-doctype path is unaffected (the forced id
+ * always wins; no classification happens). When omitted or empty, the classifier
+ * sees the full doctype catalog (unchanged legacy behavior).
+ *
+ * Multipart `partId` is a property of a doctype, not a separate doctype, so it
+ * does not enter this set. Container narrowing (Phase 7b) reuses the same
+ * mechanism with `parent.contains` as the candidate set.
+ */
+export type AllowedDoctypeIds = string[]
+
 export interface ExtractionDocument {
   doc_type_id: string | null
   label: string | null

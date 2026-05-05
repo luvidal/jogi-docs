@@ -34,4 +34,5 @@ export type {
   CompositeCedulaResult,
   CedulaFile,
   MergedCedula,
+  AllowedDoctypeIds,
 } from './types'
