@@ -895,7 +895,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         const isAnnual = dt?.freq === "annual";
         if (dt && dt.count > 1 && span > 1 && !isCedulaEntry && !isAnnual) {
           for (let p = entry.start; p <= entry.end; p++) {
-            expanded.push({ id: entry.id, start: p, end: p });
+            expanded.push({ ...entry, start: p, end: p });
           }
         } else {
           expanded.push(entry);
@@ -904,69 +904,77 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
       classified = expanded;
     }
     {
-      const containerIds = /* @__PURE__ */ new Set();
-      for (const c of classified) {
-        const dt = mapById[c.id];
-        if (dt?.contains?.length) containerIds.add(c.id);
-      }
-      for (const containerId of containerIds) {
-        const containerDt = mapById[containerId];
+      const containerEntries = classified.filter((c) => mapById[c.id]?.contains?.length);
+      const hasValidRange = (entry, minPage, maxPage) => {
+        const start = entry.start;
+        const end = entry.end;
+        if (typeof start !== "number" || typeof end !== "number") return false;
+        if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
+        return start >= minPage && end <= maxPage && start <= end;
+      };
+      for (const container of containerEntries) {
+        const containerDt = mapById[container.id];
         if (!containerDt?.contains?.length) continue;
         const containedIds = new Set(containerDt.contains);
-        const hasSubDocs = classified.some((c) => containedIds.has(c.id));
+        const containerStart = Number.isInteger(container.start) ? container.start : 1;
+        const containerEnd = Number.isInteger(container.end) ? container.end : totalPages;
+        if (containerStart < 1 || containerEnd > totalPages || containerStart > containerEnd) continue;
+        const hasSubDocs = classified.some(
+          (c) => containedIds.has(c.id) && hasValidRange(c, containerStart, containerEnd)
+        );
         if (!hasSubDocs && totalPages > 1) {
           const subDoctypes = doctypes.filter((dt) => containedIds.has(dt.id));
-          if (subDoctypes.length > 0) {
-            if (pageBase64s.length === totalPages) {
-              const subPerPage = await Promise.all(
-                pageBase64s.map(async (b64, idx) => {
-                  const localUsage = {};
-                  const c = await classifyDocument(b64, mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel);
-                  return { c, localUsage, page: idx + 1 };
-                })
-              );
-              const subPerPageFlat = [];
-              subPerPage.forEach(({ c, localUsage, page }) => {
-                Object.assign(usage, addUsage(usage, localUsage));
-                for (const entry of c) {
-                  subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence });
-                }
-              });
-              for (let i = 0; i < subPerPageFlat.length; i++) {
-                const entry = subPerPageFlat[i];
-                if (entry.partId) {
-                  classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
-                  continue;
-                }
-                let end = entry.page;
-                let minConf = entry.confidence;
-                while (i + 1 < subPerPageFlat.length && subPerPageFlat[i + 1].id === entry.id && !subPerPageFlat[i + 1].partId && subPerPageFlat[i + 1].page === end + 1) {
-                  end = subPerPageFlat[i + 1].page;
-                  const next = subPerPageFlat[i + 1].confidence;
-                  if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
-                  i++;
-                }
-                classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
+          if (subDoctypes.length === 0) continue;
+          if (pageBase64s.length === totalPages) {
+            const pages = [];
+            for (let p = containerStart; p <= containerEnd; p++) pages.push(p);
+            const subPerPage = await Promise.all(
+              pages.map(async (page) => {
+                const localUsage = {};
+                const c = await classifyDocument(pageBase64s[page - 1], mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel);
+                return { c, localUsage, page };
+              })
+            );
+            const subPerPageFlat = [];
+            subPerPage.forEach(({ c, localUsage, page }) => {
+              Object.assign(usage, addUsage(usage, localUsage));
+              for (const entry of c) {
+                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence });
               }
-            } else {
-              const subClassified = await classifyDocument(
-                base64,
-                mimetype,
-                aiModel,
-                isPDF,
-                subDoctypes,
-                usage,
-                classifyGeminiModel
-              );
-              for (const sub of subClassified) {
-                classified.push(sub);
+            });
+            for (let i = 0; i < subPerPageFlat.length; i++) {
+              const entry = subPerPageFlat[i];
+              if (entry.partId) {
+                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
+                continue;
               }
+              let end = entry.page;
+              let minConf = entry.confidence;
+              while (i + 1 < subPerPageFlat.length && subPerPageFlat[i + 1].id === entry.id && !subPerPageFlat[i + 1].partId && subPerPageFlat[i + 1].page === end + 1) {
+                end = subPerPageFlat[i + 1].page;
+                const next = subPerPageFlat[i + 1].confidence;
+                if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
+                i++;
+              }
+              classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
+            }
+          } else {
+            const subClassified = await classifyDocument(
+              base64,
+              mimetype,
+              aiModel,
+              isPDF,
+              subDoctypes,
+              usage,
+              classifyGeminiModel
+            );
+            for (const sub of subClassified) {
+              if (!containedIds.has(sub.id)) continue;
+              if (!hasValidRange(sub, containerStart, containerEnd)) continue;
+              classified.push(sub);
             }
           }
         }
-        const prior = classified.find((c) => c.id === containerId);
-        classified = classified.filter((c) => c.id !== containerId);
-        classified.unshift({ id: containerId, start: 1, end: totalPages, ...prior?.confidence !== void 0 ? { confidence: prior.confidence } : {} });
       }
     }
     const byType = /* @__PURE__ */ new Map();
@@ -1134,7 +1142,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v8";
+    PROMPT_TEMPLATE_VERSION = "v9";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {

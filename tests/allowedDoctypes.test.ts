@@ -32,7 +32,7 @@ const fixtureDoctypes: Record<string, any> = {
     'carpeta-tributaria': stub('Carpeta Tributaria', 'once', 1, { contains: ['declaracion-anual-impuestos'] }),
     'declaracion-anual-impuestos': stub('DAI', 'annual', 1),
     'informe-deuda': stub('Informe deuda'),
-    'cotizaciones-afp': stub('Cotizaciones AFP'),
+    'cotizaciones-afp': stub('Cotizaciones AFP', 'monthly', 12),
     'padron': stub('Padrón'),
     'balance-anual': stub('Balance', 'annual', 1),
 }
@@ -41,20 +41,21 @@ beforeAll(() => {
     configure({ doctypes: fixtureDoctypes })
 })
 
-async function buildSinglePagePdf(): Promise<Buffer> {
+async function buildPdf(pageCount = 1): Promise<Buffer> {
     const doc = await PDFDocument.create()
-    doc.addPage([200, 200])
+    for (let i = 0; i < pageCount; i++) doc.addPage([200, 200])
     const bytes = await doc.save()
     return Buffer.from(bytes)
 }
 
 describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     beforeEach(() => {
-        mock2vision.mockClear()
+        mock2vision.mockReset()
+        mock2vision.mockResolvedValue({ text: '{"documents":[]}', usage: undefined })
     })
 
     it('narrowed candidate set restricts the schema enum to that subset', async () => {
-        const pdf = await buildSinglePagePdf()
+        const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
             allowedDoctypeIds: ['cedula-identidad', 'liquidaciones-sueldo'],
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
@@ -70,7 +71,7 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     })
 
     it('omitted candidate set keeps the full catalog enum', async () => {
-        const pdf = await buildSinglePagePdf()
+        const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
         })
@@ -85,7 +86,7 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     })
 
     it('empty candidate array is treated as no narrowing (defensive)', async () => {
-        const pdf = await buildSinglePagePdf()
+        const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
             allowedDoctypeIds: [],
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
@@ -98,7 +99,7 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     })
 
     it('forced doctype bypasses narrowing — extract path runs without classify schema', async () => {
-        const pdf = await buildSinglePagePdf()
+        const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', 'cedula-identidad', {
             allowedDoctypeIds: ['liquidaciones-sueldo'],
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
@@ -108,5 +109,58 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         const firstCall = mock2vision.mock.calls[0]
         expect(firstCall).toBeTruthy()
         expect(firstCall[5]).toBeUndefined()
+    })
+
+    it('preserves a partial container range in mixed PDFs', async () => {
+        const pdf = await buildPdf(2)
+        mock2vision.mockImplementation(async (_model, _mimetype, _base64, _prompt, _geminiModel, schema) => {
+            const ids = schema?.properties?.documents?.items?.properties?.id?.enum ?? []
+            const isClassify = Array.isArray(ids) && ids.length > 0
+            if (!isClassify) {
+                return { text: '{"documents":[{"id":"extract","data":{},"docdate":null}]}', usage: undefined }
+            }
+
+            const callIndex = mock2vision.mock.calls.length
+            if (ids.includes('carpeta-tributaria') && ids.includes('informe-deuda')) {
+                return callIndex === 1
+                    ? { text: '{"documents":[{"id":"carpeta-tributaria","confidence":0.96}]}', usage: undefined }
+                    : { text: '{"documents":[{"id":"informe-deuda","confidence":0.94}]}', usage: undefined }
+            }
+            return { text: '{"documents":[]}', usage: undefined }
+        })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        const carpeta = result.documents.find((d: any) => d.doc_type_id === 'carpeta-tributaria')
+        const informe = result.documents.find((d: any) => d.doc_type_id === 'informe-deuda')
+        expect(carpeta).toMatchObject({ doc_type_id: 'carpeta-tributaria', start: 1, end: 1, confidence: 0.96 })
+        expect(informe).toMatchObject({ doc_type_id: 'informe-deuda', start: 2, end: 2, confidence: 0.94 })
+    })
+
+    it('preserves confidence when expanding multi-count PDF ranges', async () => {
+        const pdf = await buildPdf(2)
+        mock2vision.mockImplementation(async (_model, _mimetype, _base64, _prompt, _geminiModel, schema) => {
+            const ids = schema?.properties?.documents?.items?.properties?.id?.enum ?? []
+            const isClassify = Array.isArray(ids) && ids.length > 0
+            if (isClassify) {
+                return {
+                    text: '{"documents":[{"id":"cotizaciones-afp","start":1,"end":2,"confidence":0.91}]}',
+                    usage: undefined,
+                }
+            }
+            return { text: '{"documents":[{"id":"extract","data":{},"docdate":null}]}', usage: undefined }
+        })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        const cotizaciones = result.documents.filter((d: any) => d.doc_type_id === 'cotizaciones-afp')
+        expect(cotizaciones).toHaveLength(2)
+        expect(cotizaciones.map((d: any) => d.start)).toEqual([1, 2])
+        expect(cotizaciones.map((d: any) => d.end)).toEqual([1, 2])
+        expect(cotizaciones.map((d: any) => d.confidence)).toEqual([0.91, 0.91])
     })
 })

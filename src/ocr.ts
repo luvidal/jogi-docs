@@ -53,7 +53,10 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // 7b) reuses the same mechanism with `parent.contains` as the candidate set.
 // Cache entries are not affected by the option itself; the Jogi-side cache key
 // folds the candidate set so narrowed and full-catalog calls don't collide.
-const PROMPT_TEMPLATE_VERSION = 'v8'
+// v9: container second-pass classification preserves the classifier's detected
+// container range instead of rewriting each container to the full PDF. Mixed PDFs
+// can now keep a carpeta-tributaria slice on only its detected pages.
+const PROMPT_TEMPLATE_VERSION = 'v9'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -707,7 +710,7 @@ export async function Doc2Fields(
                 const isAnnual = dt?.freq === 'annual'
                 if (dt && dt.count > 1 && span > 1 && !isCedulaEntry && !isAnnual) {
                     for (let p = entry.start!; p <= entry.end!; p++) {
-                        expanded.push({ id: entry.id, start: p, end: p })
+                        expanded.push({ ...entry, start: p, end: p })
                     }
                 } else {
                     expanded.push(entry)
@@ -716,93 +719,107 @@ export async function Doc2Fields(
             classified = expanded
         }
 
-        // Container document detection: if a container doctype (e.g. carpeta-tributaria)
-        // is present, ensure it spans all pages and that sub-documents are identified.
-        // If the AI classified all pages as the container, do a second-pass classification
-        // against the contained sub-doctypes to identify page ranges for each.
+        // Container document detection: if a container doctype (e.g.
+        // carpeta-tributaria) is present without sub-documents inside that same
+        // range, do a second-pass classification against the contained doctypes.
+        // Preserve the detected container range; mixed PDFs may contain a
+        // container on only part of the file.
         {
-            const containerIds = new Set<string>()
-            for (const c of classified) {
-                const dt = mapById[c.id]
-                if (dt?.contains?.length) containerIds.add(c.id)
+            const containerEntries = classified.filter(c => mapById[c.id]?.contains?.length)
+
+            const hasValidRange = (
+                entry: { start?: number; end?: number },
+                minPage: number,
+                maxPage: number,
+            ): entry is { start: number; end: number } => {
+                const start = entry.start
+                const end = entry.end
+                if (typeof start !== 'number' || typeof end !== 'number') return false
+                if (!Number.isInteger(start) || !Number.isInteger(end)) return false
+                return start >= minPage && end <= maxPage && start <= end
             }
 
-            for (const containerId of containerIds) {
-                const containerDt = mapById[containerId]
+            for (const container of containerEntries) {
+                const containerDt = mapById[container.id]
                 if (!containerDt?.contains?.length) continue
                 const containedIds = new Set(containerDt.contains)
+                const containerStart = Number.isInteger(container.start) ? container.start! : 1
+                const containerEnd = Number.isInteger(container.end) ? container.end! : totalPages
+                if (containerStart < 1 || containerEnd > totalPages || containerStart > containerEnd) continue
 
-                // Check if any sub-documents were already identified by per-page classification
-                const hasSubDocs = classified.some(c => containedIds.has(c.id))
+                // Check if any sub-documents were already identified inside this
+                // container's range. Children elsewhere in a mixed PDF should not
+                // suppress fallback for this container.
+                const hasSubDocs = classified.some(c =>
+                    containedIds.has(c.id) && hasValidRange(c, containerStart, containerEnd)
+                )
 
                 if (!hasSubDocs && totalPages > 1) {
-                    // All pages classified as container — second-pass classification
+                    // Container range has no children — second-pass classification
                     // against contained sub-doctypes only.
                     //
-                    // Parallel per-page when slices are available (always the case
-                    // for totalPages > 1; we already produced `pageBase64s` above).
+                    // Parallel per-page when slices are available.
                     // A single full-PDF call here on flash-with-thinking on a 12+
                     // page Carpeta Tributaria was tens of seconds; per-page parallel
                     // is bounded by max(per-call) and the host's `MAX_CONCURRENT`.
                     const subDoctypes = doctypes.filter(dt => containedIds.has(dt.id))
-                    if (subDoctypes.length > 0) {
-                        if (pageBase64s.length === totalPages) {
-                            const subPerPage = await Promise.all(
-                                pageBase64s.map(async (b64, idx) => {
-                                    const localUsage: AIUsage = {}
-                                    const c = await classifyDocument(b64, mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel)
-                                    return { c, localUsage, page: idx + 1 }
-                                })
-                            )
-                            // Merge adjacent same-doctype pages into ranges, same
-                            // policy as phase 1 (cédula entries with partId stay
-                            // single-page).
-                            const subPerPageFlat: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
-                            subPerPage.forEach(({ c, localUsage, page }) => {
-                                Object.assign(usage, addUsage(usage, localUsage))
-                                for (const entry of c) {
-                                    subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence })
-                                }
+                    if (subDoctypes.length === 0) continue
+
+                    if (pageBase64s.length === totalPages) {
+                        const pages: number[] = []
+                        for (let p = containerStart; p <= containerEnd; p++) pages.push(p)
+                        const subPerPage = await Promise.all(
+                            pages.map(async (page) => {
+                                const localUsage: AIUsage = {}
+                                const c = await classifyDocument(pageBase64s[page - 1], mimetype, aiModel, false, subDoctypes, localUsage, classifyGeminiModel)
+                                return { c, localUsage, page }
                             })
-                            for (let i = 0; i < subPerPageFlat.length; i++) {
-                                const entry = subPerPageFlat[i]
-                                if (entry.partId) {
-                                    classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
-                                    continue
-                                }
-                                let end = entry.page
-                                let minConf = entry.confidence
-                                while (
-                                    i + 1 < subPerPageFlat.length &&
-                                    subPerPageFlat[i + 1].id === entry.id &&
-                                    !subPerPageFlat[i + 1].partId &&
-                                    subPerPageFlat[i + 1].page === end + 1
-                                ) {
-                                    end = subPerPageFlat[i + 1].page
-                                    const next = subPerPageFlat[i + 1].confidence
-                                    if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
-                                    i++
-                                }
-                                classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
+                        )
+                        // Merge adjacent same-doctype pages into ranges, same
+                        // policy as phase 1 (cédula entries with partId stay
+                        // single-page).
+                        const subPerPageFlat: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                        subPerPage.forEach(({ c, localUsage, page }) => {
+                            Object.assign(usage, addUsage(usage, localUsage))
+                            for (const entry of c) {
+                                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence })
                             }
-                        } else {
-                            // Fallback (single-page or slicing failed): one full-PDF call.
-                            const subClassified = await classifyDocument(
-                                base64, mimetype, aiModel, isPDF, subDoctypes, usage, classifyGeminiModel
-                            )
-                            for (const sub of subClassified) {
-                                classified.push(sub)
+                        })
+                        for (let i = 0; i < subPerPageFlat.length; i++) {
+                            const entry = subPerPageFlat[i]
+                            if (entry.partId) {
+                                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
+                                continue
                             }
+                            let end = entry.page
+                            let minConf = entry.confidence
+                            while (
+                                i + 1 < subPerPageFlat.length &&
+                                subPerPageFlat[i + 1].id === entry.id &&
+                                !subPerPageFlat[i + 1].partId &&
+                                subPerPageFlat[i + 1].page === end + 1
+                            ) {
+                                end = subPerPageFlat[i + 1].page
+                                const next = subPerPageFlat[i + 1].confidence
+                                if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
+                                i++
+                            }
+                            classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
+                        }
+                    } else {
+                        // Fallback (slicing failed): one full-PDF call, but only
+                        // merge children whose returned range sits inside this
+                        // container's detected range.
+                        const subClassified = await classifyDocument(
+                            base64, mimetype, aiModel, isPDF, subDoctypes, usage, classifyGeminiModel
+                        )
+                        for (const sub of subClassified) {
+                            if (!containedIds.has(sub.id)) continue
+                            if (!hasValidRange(sub, containerStart, containerEnd)) continue
+                            classified.push(sub)
                         }
                     }
                 }
-
-                // Ensure a single container entry spans all pages. Carry over
-                // the original container's confidence (if any) so downstream
-                // gating still applies to the container slot.
-                const prior = classified.find(c => c.id === containerId)
-                classified = classified.filter(c => c.id !== containerId)
-                classified.unshift({ id: containerId, start: 1, end: totalPages, ...(prior?.confidence !== undefined ? { confidence: prior.confidence } : {}) })
             }
         }
 
