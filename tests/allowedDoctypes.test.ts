@@ -54,6 +54,22 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         mock2vision.mockResolvedValue({ text: '{"documents":[]}', usage: undefined })
     })
 
+    // Phase 2 schema may discriminate via `anyOf` branches keyed on `id`.
+    // Collect the union of all branch ids regardless of which doctype-with-data
+    // branches are split off.
+    function collectIds(schema: any): string[] {
+        const items = schema?.properties?.documents?.items
+        if (!items) return []
+        if (Array.isArray(items.anyOf)) {
+            const out = new Set<string>()
+            for (const branch of items.anyOf) {
+                for (const id of branch?.properties?.id?.enum ?? []) out.add(id)
+            }
+            return [...out]
+        }
+        return items.properties?.id?.enum ?? []
+    }
+
     it('narrowed candidate set restricts the schema enum to that subset', async () => {
         const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
@@ -66,8 +82,9 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         expect(firstCall).toBeTruthy()
         const schemaArg = firstCall[5]
         expect(schemaArg).toBeTruthy()
-        const enum_ = schemaArg.properties.documents.items.properties.id.enum
-        expect(enum_).toEqual(['cedula-identidad', 'liquidaciones-sueldo'])
+        expect(collectIds(schemaArg).sort()).toEqual(
+            ['cedula-identidad', 'liquidaciones-sueldo'].sort(),
+        )
     })
 
     it('omitted candidate set keeps the full catalog enum', async () => {
@@ -77,12 +94,12 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         })
         const firstCall = mock2vision.mock.calls[0]
         expect(firstCall).toBeTruthy()
-        const enum_ = firstCall[5].properties.documents.items.properties.id.enum
+        const ids = collectIds(firstCall[5])
         // Spot-check: a known pair is present and the list is much larger than
         // any narrowed set we'd test elsewhere.
-        expect(enum_).toContain('cedula-identidad')
-        expect(enum_).toContain('liquidaciones-sueldo')
-        expect(enum_.length).toBeGreaterThan(5)
+        expect(ids).toContain('cedula-identidad')
+        expect(ids).toContain('liquidaciones-sueldo')
+        expect(ids.length).toBeGreaterThan(5)
     })
 
     it('empty candidate array is treated as no narrowing (defensive)', async () => {
@@ -92,10 +109,10 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
         })
         const firstCall = mock2vision.mock.calls[0]
-        const enum_ = firstCall[5].properties.documents.items.properties.id.enum
+        const ids = collectIds(firstCall[5])
         // Same ballpark as full catalog — empty allowedDoctypeIds must not
         // produce an empty enum and break the call.
-        expect(enum_.length).toBeGreaterThan(5)
+        expect(ids.length).toBeGreaterThan(5)
     })
 
     it('forced doctype bypasses narrowing — extract path runs without classify schema', async () => {
@@ -114,7 +131,7 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     it('preserves a partial container range in mixed PDFs', async () => {
         const pdf = await buildPdf(2)
         mock2vision.mockImplementation(async (_model, _mimetype, _base64, _prompt, _geminiModel, schema) => {
-            const ids = schema?.properties?.documents?.items?.properties?.id?.enum ?? []
+            const ids = collectIds(schema)
             const isClassify = Array.isArray(ids) && ids.length > 0
             if (!isClassify) {
                 return { text: '{"documents":[{"id":"extract","data":{},"docdate":null}]}', usage: undefined }
@@ -142,7 +159,7 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
     it('preserves confidence when expanding multi-count PDF ranges', async () => {
         const pdf = await buildPdf(2)
         mock2vision.mockImplementation(async (_model, _mimetype, _base64, _prompt, _geminiModel, schema) => {
-            const ids = schema?.properties?.documents?.items?.properties?.id?.enum ?? []
+            const ids = collectIds(schema)
             const isClassify = Array.isArray(ids) && ids.length > 0
             if (isClassify) {
                 return {

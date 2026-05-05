@@ -433,6 +433,7 @@ __export(ocr_exports, {
   Doc2Fields: () => Doc2Fields,
   buildCacheKey: () => buildCacheKey,
   buildClassifyResponseSchema: () => buildClassifyResponseSchema,
+  buildDataSchemaForDoctype: () => buildDataSchemaForDoctype,
   detectCedulaSide: () => detectCedulaSide,
   extractPdfPageAsImage: () => extractPdfPageAsImage,
   getPromptVersion: () => getPromptVersion,
@@ -629,26 +630,235 @@ function normalizeDoc(d) {
   const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
   return { id, data, docdate, start, end, partId, confidence };
 }
-function buildClassifyResponseSchema(doctypeIds, isPDF) {
-  const documentProps = {
-    id: { type: "STRING", enum: doctypeIds },
-    confidence: { type: "NUMBER", minimum: 0, maximum: 1 },
-    partId: { type: "STRING", enum: ["front", "back"], nullable: true }
-  };
-  if (isPDF) {
-    documentProps.start = { type: "INTEGER", minimum: 1 };
-    documentProps.end = { type: "INTEGER", minimum: 1 };
+function buildDataSchemaForDoctype(docTypeId) {
+  switch (docTypeId) {
+    case "cedula-identidad":
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          rut: STR,
+          nombres: STR,
+          apellidos: STR,
+          nacionalidad: STR,
+          sexo: STR,
+          fecha_nacimiento: STR,
+          numero_documento: STR,
+          fecha_emision: STR,
+          fecha_vencimiento: STR,
+          lugar_nacimiento: STR,
+          profesion: STR
+        }
+      };
+    case "liquidaciones-sueldo": {
+      const lineItem = {
+        type: "OBJECT",
+        properties: {
+          label: STR,
+          value: NUM
+        }
+      };
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          empleador: STR,
+          nombre: STR,
+          rut: STR,
+          periodo: STR,
+          dias_trabajados: NUM,
+          fecha_ingreso: STR,
+          cargo: STR,
+          institucion_previsional: STR,
+          institucion_salud: STR,
+          base_imponible: NUM,
+          base_tributable: NUM,
+          haberes: { type: "ARRAY", nullable: true, items: lineItem },
+          descuentos: { type: "ARRAY", nullable: true, items: lineItem }
+        }
+      };
+    }
+    case "informe-deuda": {
+      const deudaItem = {
+        type: "OBJECT",
+        properties: {
+          entidad: STR,
+          tipo: STR,
+          total_credito: NUM,
+          vigente: NUM,
+          atraso_30_59: NUM,
+          atraso_60_89: NUM,
+          atraso_90_mas: NUM
+        }
+      };
+      const creditoItem = {
+        type: "OBJECT",
+        properties: {
+          entidad: STR,
+          directos: NUM,
+          indirectos: NUM
+        }
+      };
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          rut: STR,
+          nombre: STR,
+          deuda_total: NUM,
+          fecha_informe: STR,
+          deudas: { type: "ARRAY", nullable: true, items: deudaItem },
+          deudas_indirectas: { type: "ARRAY", nullable: true, items: deudaItem },
+          lineas_credito: { type: "ARRAY", nullable: true, items: creditoItem },
+          otros_creditos: { type: "ARRAY", nullable: true, items: creditoItem }
+        }
+      };
+    }
+    case "padron":
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          inscripcion: STR,
+          rut_propietario: STR,
+          propietario: STR,
+          domicilio: STR,
+          comuna: STR,
+          fecha_adquisicion: STR,
+          fecha_inscripcion: STR,
+          fecha_emision: STR,
+          marca: STR,
+          modelo: STR,
+          motor: STR,
+          chasis: STR,
+          color: STR,
+          tasacion_fiscal: NUM,
+          "a\xF1o": NUM
+        }
+      };
+    case "declaracion-anual-impuestos": {
+      const codeKeys = ["547", "110", "104", "105", "155", "161", "170", "305"];
+      const codes = {};
+      for (const k of codeKeys) codes[k] = NUM;
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          rut: STR,
+          nombre: STR,
+          "a\xF1o_tributario": NUM,
+          codes: {
+            type: "OBJECT",
+            nullable: true,
+            properties: codes
+          }
+        }
+      };
+    }
+    case "resumen-boletas-sii": {
+      const monthRow = {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          boletas_vigentes: NUM,
+          honorario_bruto: NUM,
+          retencion: NUM,
+          liquido: NUM
+        }
+      };
+      const months = {};
+      const monthKeys = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre"
+      ];
+      for (const m of monthKeys) months[m] = monthRow;
+      return {
+        type: "OBJECT",
+        nullable: true,
+        properties: {
+          rut: STR,
+          contribuyente: STR,
+          "a\xF1o": NUM,
+          totales: {
+            type: "OBJECT",
+            nullable: true,
+            properties: {
+              boletas_vigentes: NUM,
+              boletas_anuladas: NUM,
+              honorario_bruto: NUM,
+              retencion_terceros: NUM,
+              retencion_contribuyente: NUM,
+              total_liquido: NUM
+            }
+          },
+          meses: {
+            type: "OBJECT",
+            nullable: true,
+            properties: months
+          }
+        }
+      };
+    }
+    default:
+      return null;
   }
+}
+function buildClassifyResponseSchema(doctypeIds, isPDF) {
+  const buildBaseProps = (idEnum) => {
+    const props = {
+      id: { type: "STRING", enum: idEnum },
+      confidence: { type: "NUMBER", minimum: 0, maximum: 1 },
+      partId: { type: "STRING", enum: ["front", "back"], nullable: true }
+    };
+    if (isPDF) {
+      props.start = { type: "INTEGER", minimum: 1 };
+      props.end = { type: "INTEGER", minimum: 1 };
+    }
+    return props;
+  };
+  const baseRequired = isPDF ? ["id", "confidence", "start", "end"] : ["id", "confidence"];
+  const branches = [];
+  const fallbackIds = [];
+  for (const id of doctypeIds) {
+    const dataSchema = DATA_SCHEMA_DOCTYPES.has(id) ? buildDataSchemaForDoctype(id) : null;
+    if (!dataSchema) {
+      fallbackIds.push(id);
+      continue;
+    }
+    branches.push({
+      type: "OBJECT",
+      properties: {
+        ...buildBaseProps([id]),
+        data: dataSchema,
+        docdate: { type: "STRING", nullable: true }
+      },
+      required: baseRequired
+    });
+  }
+  if (fallbackIds.length > 0 || branches.length === 0) {
+    branches.push({
+      type: "OBJECT",
+      properties: buildBaseProps(fallbackIds.length > 0 ? fallbackIds : doctypeIds),
+      required: baseRequired
+    });
+  }
+  const items = branches.length === 1 ? branches[0] : { anyOf: branches };
   return {
     type: "OBJECT",
     properties: {
       documents: {
         type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: documentProps,
-          required: isPDF ? ["id", "confidence", "start", "end"] : ["id", "confidence"]
-        }
+        items
       }
     },
     required: ["documents"]
@@ -666,14 +876,19 @@ async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageA
     return `${base}
   fields: ${fields}`;
   }).join("\n");
+  const inlineDataIds = doctypes.map((d) => d.id).filter((id) => DATA_SCHEMA_DOCTYPES.has(id));
+  const inlineDataLine = inlineDataIds.length > 0 ? `Para los tipos { ${inlineDataIds.join(", ")} }, adem\xE1s del id/confidence/rango incluye "data" (objeto con los campos del esquema correspondiente \u2014 usa el "key" exacto de "fields" arriba) y "docdate" (formato YYYY-MM-DD; la fecha a la que CORRESPONDE la informaci\xF3n, NO la fecha de descarga). Para otros tipos, "data" y "docdate" son opcionales.` : "";
   const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ""},"partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ""},"partId":"front|back","data":{...},"docdate":"YYYY-MM-DD"}]}
 ${isPDF ? `"start"/"end": p\xE1ginas 1-indexed. Si un tipo aparece m\xFAltiples veces (ej: varias liquidaciones), devuelve uno por instancia con su rango de p\xE1ginas. P\xE1ginas que no correspondan a ning\xFAn tipo listado deben ignorarse.
 Si una p\xE1gina contiene AMBAS caras de una c\xE9dula (frente y reverso), devuelve DOS elementos con la misma p\xE1gina y diferente partId.` : `Si la imagen contiene AMBAS caras de una c\xE9dula (frente y reverso apilados), devuelve DOS elementos. Para otro documento, devuelve uno solo.`}
 "partId": solo para c\xE9dula-identidad. Frente tiene foto/RUT/nombre. Reverso tiene firma/huella/profesi\xF3n.
 "confidence": 0.0-1.0, qu\xE9 tan seguro est\xE1s del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
+- Campos type:"num": devuelve n\xFAmero entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
+- No inventes datos salvo campos con instrucci\xF3n "ai".
+${inlineDataLine}
 Tipos v\xE1lidos:
 ${typeList}`;
   const schema = buildClassifyResponseSchema(doctypes.map((d) => d.id), isPDF);
@@ -686,12 +901,17 @@ ${typeList}`;
     const end = Number.isFinite(d?.end) ? Number(d.end) : d?.end ? parseInt(d.end, 10) : void 0;
     const partId = d?.partId || d?.part_id || d?.partid || void 0;
     const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
+    const data = d?.data && typeof d.data === "object" && !Array.isArray(d.data) ? d.data : void 0;
+    const rawDate = d?.docdate || d?.document_date || d?.documentDate || null;
+    const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN((/* @__PURE__ */ new Date(`${rawDate}T12:00:00`)).getTime()) ? rawDate : null;
     return {
       id,
       ...Number.isFinite(start) ? { start } : {},
       ...Number.isFinite(end) ? { end } : {},
       ...partId ? { partId } : {},
-      ...confidence !== void 0 ? { confidence } : {}
+      ...confidence !== void 0 ? { confidence } : {},
+      ...data ? { data } : {},
+      ...docdate ? { docdate } : {}
     };
   }).filter((d) => d.id);
 }
@@ -840,14 +1060,14 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         perPageClassifications.forEach(({ classified: classified2, localUsage }, idx) => {
           Object.assign(usage, addUsage(usage, localUsage));
           for (const c of classified2) {
-            perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence });
+            perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate });
           }
         });
         classified = [];
         for (let i = 0; i < perPage.length; i++) {
           const entry = perPage[i];
           if (entry.partId) {
-            classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
+            classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {}, ...entry.data ? { data: entry.data } : {}, ...entry.docdate ? { docdate: entry.docdate } : {} });
             continue;
           }
           let end = entry.page;
@@ -858,7 +1078,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
             if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
             i++;
           }
-          classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
+          classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {}, ...entry.data ? { data: entry.data } : {}, ...entry.docdate ? { docdate: entry.docdate } : {} });
         }
       } else {
         classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel);
@@ -941,13 +1161,13 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
             subPerPage.forEach(({ c, localUsage, page }) => {
               Object.assign(usage, addUsage(usage, localUsage));
               for (const entry of c) {
-                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence });
+                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence, data: entry.data, docdate: entry.docdate });
               }
             });
             for (let i = 0; i < subPerPageFlat.length; i++) {
               const entry = subPerPageFlat[i];
               if (entry.partId) {
-                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {} });
+                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...entry.confidence !== void 0 ? { confidence: entry.confidence } : {}, ...entry.data ? { data: entry.data } : {}, ...entry.docdate ? { docdate: entry.docdate } : {} });
                 continue;
               }
               let end = entry.page;
@@ -958,7 +1178,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
                 if (next !== void 0) minConf = minConf === void 0 ? next : Math.min(minConf, next);
                 i++;
               }
-              classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {} });
+              classified.push({ id: entry.id, start: entry.page, end, ...minConf !== void 0 ? { confidence: minConf } : {}, ...entry.data ? { data: entry.data } : {}, ...entry.docdate ? { docdate: entry.docdate } : {} });
             }
           } else {
             const subClassified = await classifyDocument(
@@ -982,7 +1202,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
     const byType = /* @__PURE__ */ new Map();
     for (const c of classified) {
       const existing = byType.get(c.id) || [];
-      existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence });
+      existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate });
       byType.set(c.id, existing);
     }
     const MAX_PER_BATCH = 8;
@@ -1035,6 +1255,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         if (!extractedByType.has(n.id)) extractedByType.set(n.id, []);
         extractedByType.get(n.id).push(n);
       }
+      const hasFields = (d) => !!d && typeof d === "object" && Object.keys(d).length > 0;
       allRawDocs = [];
       for (const [typeId, classEntries] of byType) {
         if (!mapById[typeId]) continue;
@@ -1063,10 +1284,12 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
           for (let i = 0; i < sortedClass.length; i++) {
             const cls = sortedClass[i];
             const ext = i < sortedExtracted.length ? sortedExtracted[i] : null;
+            const data = hasFields(ext?.data) ? ext.data : cls.data || {};
+            const docdate = ext?.docdate || cls.docdate || null;
             allRawDocs.push({
               id: typeId,
-              data: ext?.data || {},
-              docdate: ext?.docdate || null,
+              data,
+              docdate,
               ...cls.confidence !== void 0 ? { confidence: cls.confidence } : {},
               start: cls.start,
               end: cls.end,
@@ -1138,13 +1361,13 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const hasUsage = usage.promptTokenCount || usage.candidatesTokenCount;
   return { documents, ...hasUsage ? { usage } : {} };
 }
-var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng;
+var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, DATA_SCHEMA_DOCTYPES, STR, NUM;
 var init_ocr = __esm({
   "src/ocr.ts"() {
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v9";
+    PROMPT_TEMPLATE_VERSION = "v10";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
@@ -1152,6 +1375,16 @@ var init_ocr = __esm({
       }
       return pdfToPngModule.pdfToPng;
     };
+    DATA_SCHEMA_DOCTYPES = /* @__PURE__ */ new Set([
+      "cedula-identidad",
+      "liquidaciones-sueldo",
+      "informe-deuda",
+      "padron",
+      "declaracion-anual-impuestos",
+      "resumen-boletas-sii"
+    ]);
+    STR = { type: "STRING", nullable: true };
+    NUM = { type: "NUMBER", nullable: true };
   }
 });
 
@@ -1541,6 +1774,7 @@ async function generateThumbnailFromPdf(buffer) {
 exports.Doc2Fields = Doc2Fields;
 exports.buildCacheKey = buildCacheKey;
 exports.buildClassifyResponseSchema = buildClassifyResponseSchema;
+exports.buildDataSchemaForDoctype = buildDataSchemaForDoctype;
 exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
 exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;

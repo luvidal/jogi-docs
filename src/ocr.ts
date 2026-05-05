@@ -56,7 +56,17 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // v9: container second-pass classification preserves the classifier's detected
 // container range instead of rewriting each container to the full PDF. Mixed PDFs
 // can now keep a carpeta-tributaria slice on only its detected pages.
-const PROMPT_TEMPLATE_VERSION = 'v9'
+// v10: Phase 2 — multi-page classifier `responseSchema` carries per-doctype
+// `data` object schemas as discriminated `anyOf` branches keyed on `id`. The
+// six covered doctypes (`cedula-identidad`, `liquidaciones-sueldo`,
+// `informe-deuda`, `padron`, `declaracion-anual-impuestos`,
+// `resumen-boletas-sii`) get explicit data shapes; remaining doctypes share a
+// fallback branch with no `data` constraint. The classify prompt now also
+// instructs the model to populate `data` + `docdate` inline. The merge step
+// falls back to classify-inline data when extractFields returns empty so the
+// inline payload isn't silently dropped on extract failures. v9 cache entries
+// are invalidated by the bump (new payload shape, new prompt).
+const PROMPT_TEMPLATE_VERSION = 'v10'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -315,42 +325,291 @@ Devuelve JSON: {"documents":[{"start":1,"end":3},{"start":4,"end":4},{"start":5,
 // ─── Pass 1: Classify ────────────────────────────────────────────────────────
 
 /**
- * Build the Gemini `responseSchema` (Phase 1, shape only) for the multi-page classifier.
+ * Doctypes covered by Phase 2 per-doctype `data` object schemas. Anything
+ * outside this set falls into the schema's fallback branch (no `data`
+ * constraint). Restricted to doctypes whose extracted-field shape is stable —
+ * additions go through review.
+ */
+const DATA_SCHEMA_DOCTYPES = new Set<string>([
+    'cedula-identidad',
+    'liquidaciones-sueldo',
+    'informe-deuda',
+    'padron',
+    'declaracion-anual-impuestos',
+    'resumen-boletas-sii',
+])
+
+/** Convenience builders to keep per-doctype schemas readable. */
+const STR = { type: 'STRING', nullable: true } as ResponseSchema
+const NUM = { type: 'NUMBER', nullable: true } as ResponseSchema
+
+/**
+ * Hand-written `data` object schema per doctype. Returns `null` for doctypes
+ * whose data shape is still in flux — the responseSchema then falls them into
+ * the no-data fallback branch.
  *
- * - `id` is an enum over the candidate doctype list. Cuts off-list hallucinations at
- *   the model boundary instead of in `parseRawDocs`.
- * - `start` / `end` are integers (PDF only — single-image classify omits page ranges).
- * - `confidence` is a required number in `[0,1]` so downstream destructive-op gates
- *   always have a value to act on.
- * - `partId` is `front | back` and only emitted for multipart doctypes.
+ * Properties are nullable rather than required: a single missing field on a
+ * scanned document shouldn't make Gemini reject the entire response. Page
+ * coverage, overlap, and per-doctype sanity stay enforced app-side.
+ */
+export function buildDataSchemaForDoctype(docTypeId: string): ResponseSchema | null {
+    switch (docTypeId) {
+        case 'cedula-identidad':
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    rut: STR,
+                    nombres: STR,
+                    apellidos: STR,
+                    nacionalidad: STR,
+                    sexo: STR,
+                    fecha_nacimiento: STR,
+                    numero_documento: STR,
+                    fecha_emision: STR,
+                    fecha_vencimiento: STR,
+                    lugar_nacimiento: STR,
+                    profesion: STR,
+                },
+            }
+        case 'liquidaciones-sueldo': {
+            const lineItem: ResponseSchema = {
+                type: 'OBJECT',
+                properties: {
+                    label: STR,
+                    value: NUM,
+                },
+            }
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    empleador: STR,
+                    nombre: STR,
+                    rut: STR,
+                    periodo: STR,
+                    dias_trabajados: NUM,
+                    fecha_ingreso: STR,
+                    cargo: STR,
+                    institucion_previsional: STR,
+                    institucion_salud: STR,
+                    base_imponible: NUM,
+                    base_tributable: NUM,
+                    haberes: { type: 'ARRAY', nullable: true, items: lineItem },
+                    descuentos: { type: 'ARRAY', nullable: true, items: lineItem },
+                },
+            }
+        }
+        case 'informe-deuda': {
+            const deudaItem: ResponseSchema = {
+                type: 'OBJECT',
+                properties: {
+                    entidad: STR,
+                    tipo: STR,
+                    total_credito: NUM,
+                    vigente: NUM,
+                    atraso_30_59: NUM,
+                    atraso_60_89: NUM,
+                    atraso_90_mas: NUM,
+                },
+            }
+            const creditoItem: ResponseSchema = {
+                type: 'OBJECT',
+                properties: {
+                    entidad: STR,
+                    directos: NUM,
+                    indirectos: NUM,
+                },
+            }
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    rut: STR,
+                    nombre: STR,
+                    deuda_total: NUM,
+                    fecha_informe: STR,
+                    deudas: { type: 'ARRAY', nullable: true, items: deudaItem },
+                    deudas_indirectas: { type: 'ARRAY', nullable: true, items: deudaItem },
+                    lineas_credito: { type: 'ARRAY', nullable: true, items: creditoItem },
+                    otros_creditos: { type: 'ARRAY', nullable: true, items: creditoItem },
+                },
+            }
+        }
+        case 'padron':
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    inscripcion: STR,
+                    rut_propietario: STR,
+                    propietario: STR,
+                    domicilio: STR,
+                    comuna: STR,
+                    fecha_adquisicion: STR,
+                    fecha_inscripcion: STR,
+                    fecha_emision: STR,
+                    marca: STR,
+                    modelo: STR,
+                    motor: STR,
+                    chasis: STR,
+                    color: STR,
+                    tasacion_fiscal: NUM,
+                    'año': NUM,
+                },
+            }
+        case 'declaracion-anual-impuestos': {
+            // F22 codes the planner consumes for derived fields. Listing the
+            // known codes (rather than leaving `codes` open) lets the schema
+            // anchor each value as a nullable NUMBER without forcing the model
+            // to invent unseen codes.
+            const codeKeys = ['547', '110', '104', '105', '155', '161', '170', '305']
+            const codes: Record<string, ResponseSchema> = {}
+            for (const k of codeKeys) codes[k] = NUM
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    rut: STR,
+                    nombre: STR,
+                    'año_tributario': NUM,
+                    codes: {
+                        type: 'OBJECT',
+                        nullable: true,
+                        properties: codes,
+                    },
+                },
+            }
+        }
+        case 'resumen-boletas-sii': {
+            const monthRow: ResponseSchema = {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    boletas_vigentes: NUM,
+                    honorario_bruto: NUM,
+                    retencion: NUM,
+                    liquido: NUM,
+                },
+            }
+            const months: Record<string, ResponseSchema> = {}
+            const monthKeys = [
+                'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+                'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+            ]
+            for (const m of monthKeys) months[m] = monthRow
+            return {
+                type: 'OBJECT',
+                nullable: true,
+                properties: {
+                    rut: STR,
+                    contribuyente: STR,
+                    'año': NUM,
+                    totales: {
+                        type: 'OBJECT',
+                        nullable: true,
+                        properties: {
+                            boletas_vigentes: NUM,
+                            boletas_anuladas: NUM,
+                            honorario_bruto: NUM,
+                            retencion_terceros: NUM,
+                            retencion_contribuyente: NUM,
+                            total_liquido: NUM,
+                        },
+                    },
+                    meses: {
+                        type: 'OBJECT',
+                        nullable: true,
+                        properties: months,
+                    },
+                },
+            }
+        }
+        default:
+            return null
+    }
+}
+
+/**
+ * Build the Gemini `responseSchema` for the multi-page classifier.
  *
- * Per-doctype `data` object schemas are NOT included — that's Phase 2 (Step 8b in the
- * jogi `docs/plans/ocr-refactor.md`). The app still independently validates page
- * coverage, overlaps, request authorization, and per-doctype sanity.
+ * Phase 1 (shape) and Phase 2 (per-doctype `data`) are folded into one
+ * builder. Each branch in `documents.items.anyOf` is keyed on `id` (a
+ * single-value enum acts as the discriminator):
+ *
+ * - Doctypes in {@link DATA_SCHEMA_DOCTYPES} get a dedicated branch with
+ *   `data` (per-doctype object schema) and `docdate` (string, nullable).
+ * - Every other candidate doctype shares one fallback branch with no `data`
+ *   constraint — keeps the schema small and tolerant for unaudited shapes.
+ *
+ * Shape-level invariants (still enforced):
+ * - `id` is enum-restricted to the candidate doctype list.
+ * - `start`/`end` are integers (PDF only).
+ * - `confidence` is required and bounded `[0,1]`.
+ * - `partId` is the `front | back` enum, nullable.
+ *
+ * The app still independently validates page coverage, overlaps, request
+ * authorization, and per-doctype sanity.
  */
 export function buildClassifyResponseSchema(
     doctypeIds: string[],
     isPDF: boolean,
 ): ResponseSchema {
-    const documentProps: Record<string, unknown> = {
-        id: { type: 'STRING', enum: doctypeIds },
-        confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
-        partId: { type: 'STRING', enum: ['front', 'back'], nullable: true },
+    const buildBaseProps = (idEnum: string[]): Record<string, ResponseSchema> => {
+        const props: Record<string, ResponseSchema> = {
+            id: { type: 'STRING', enum: idEnum },
+            confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
+            partId: { type: 'STRING', enum: ['front', 'back'], nullable: true },
+        }
+        if (isPDF) {
+            props.start = { type: 'INTEGER', minimum: 1 }
+            props.end = { type: 'INTEGER', minimum: 1 }
+        }
+        return props
     }
-    if (isPDF) {
-        documentProps.start = { type: 'INTEGER', minimum: 1 }
-        documentProps.end = { type: 'INTEGER', minimum: 1 }
+    const baseRequired = isPDF ? ['id', 'confidence', 'start', 'end'] : ['id', 'confidence']
+
+    const branches: ResponseSchema[] = []
+    const fallbackIds: string[] = []
+
+    for (const id of doctypeIds) {
+        const dataSchema = DATA_SCHEMA_DOCTYPES.has(id) ? buildDataSchemaForDoctype(id) : null
+        if (!dataSchema) {
+            fallbackIds.push(id)
+            continue
+        }
+        branches.push({
+            type: 'OBJECT',
+            properties: {
+                ...buildBaseProps([id]),
+                data: dataSchema,
+                docdate: { type: 'STRING', nullable: true },
+            },
+            required: baseRequired,
+        })
     }
+    if (fallbackIds.length > 0 || branches.length === 0) {
+        // Fallback: the existing Phase 1 shape (no `data`/`docdate` constraint).
+        // Always include it when at least one candidate is uncovered, and as the
+        // sole branch when the caller passed an empty doctype list (defensive
+        // for the empty-narrowed-pass edge case).
+        branches.push({
+            type: 'OBJECT',
+            properties: buildBaseProps(fallbackIds.length > 0 ? fallbackIds : doctypeIds),
+            required: baseRequired,
+        })
+    }
+
+    const items: ResponseSchema = branches.length === 1
+        ? branches[0]
+        : { anyOf: branches } as ResponseSchema
+
     return {
         type: 'OBJECT',
         properties: {
             documents: {
                 type: 'ARRAY',
-                items: {
-                    type: 'OBJECT',
-                    properties: documentProps,
-                    required: isPDF ? ['id', 'confidence', 'start', 'end'] : ['id', 'confidence'],
-                },
+                items,
             },
         },
         required: ['documents'],
@@ -362,7 +621,7 @@ async function classifyDocument(
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
     usageAccum?: AIUsage,
     geminiModel?: string,
-): Promise<Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number }>> {
+): Promise<Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>> {
     const typeList = doctypes.map(dt => {
         const base = `• ${dt.id}: ${dt.definition || dt.label}`
         if (!dt.fieldDefs?.length) return base
@@ -374,9 +633,18 @@ async function classifyDocument(
         return `${base}\n  fields: ${fields}`
     }).join('\n')
 
+    // Phase 2 — listing the doctypes whose `data` is enforced by the
+    // responseSchema's discriminated branches. The model is asked to populate
+    // those inline; everything else may omit `data`/`docdate` and falls into
+    // the schema's no-data fallback branch.
+    const inlineDataIds = doctypes.map(d => d.id).filter(id => DATA_SCHEMA_DOCTYPES.has(id))
+    const inlineDataLine = inlineDataIds.length > 0
+        ? `Para los tipos { ${inlineDataIds.join(', ')} }, además del id/confidence/rango incluye "data" (objeto con los campos del esquema correspondiente — usa el "key" exacto de "fields" arriba) y "docdate" (formato YYYY-MM-DD; la fecha a la que CORRESPONDE la información, NO la fecha de descarga). Para otros tipos, "data" y "docdate" son opcionales.`
+        : ''
+
     const prompt = `Identifica los tipos de documento en este archivo chileno.
 Si el archivo NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ''},"partId":"front|back"}]}
+Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0${isPDF ? ',"start":1,"end":1' : ''},"partId":"front|back","data":{...},"docdate":"YYYY-MM-DD"}]}
 ${isPDF
     ? `"start"/"end": páginas 1-indexed. Si un tipo aparece múltiples veces (ej: varias liquidaciones), devuelve uno por instancia con su rango de páginas. Páginas que no correspondan a ningún tipo listado deben ignorarse.
 Si una página contiene AMBAS caras de una cédula (frente y reverso), devuelve DOS elementos con la misma página y diferente partId.`
@@ -385,13 +653,15 @@ Si una página contiene AMBAS caras de una cédula (frente y reverso), devuelve 
 "partId": solo para cédula-identidad. Frente tiene foto/RUT/nombre. Reverso tiene firma/huella/profesión.
 "confidence": 0.0-1.0, qué tan seguro estás del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
 - Si no estás seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
+- Campos type:"num": devuelve número entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
+- No inventes datos salvo campos con instrucción "ai".
+${inlineDataLine}
 Tipos válidos:
 ${typeList}`
 
-    // Schema-enforced output (Phase 1, shape only). Only the multi-page PDF
-    // route benefits today — single-image / single-PDF-page classify paths
-    // route through `model2vision` without a schema so existing behavior is
-    // preserved for unaudited callers.
+    // Schema-enforced output. The multi-page PDF route is the primary
+    // beneficiary; single-image / single-PDF-page classify paths reuse the
+    // same builder so the contract is consistent across routes.
     const schema = buildClassifyResponseSchema(doctypes.map(d => d.id), isPDF)
 
     const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema)
@@ -404,12 +674,17 @@ ${typeList}`
         const end = Number.isFinite(d?.end) ? Number(d.end) : (d?.end ? parseInt(d.end, 10) : undefined)
         const partId = d?.partId || d?.part_id || d?.partid || undefined
         const confidence = typeof d?.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : undefined
+        const data = d?.data && typeof d.data === 'object' && !Array.isArray(d.data) ? d.data as Record<string, unknown> : undefined
+        const rawDate = d?.docdate || d?.document_date || d?.documentDate || null
+        const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN(new Date(`${rawDate}T12:00:00`).getTime()) ? rawDate : null
         return {
             id,
             ...(Number.isFinite(start) ? { start } : {}),
             ...(Number.isFinite(end) ? { end } : {}),
             ...(partId ? { partId } : {}),
             ...(confidence !== undefined ? { confidence } : {}),
+            ...(data ? { data } : {}),
+            ...(docdate ? { docdate } : {}),
         }
     }).filter((d: any) => d.id)
 }
@@ -587,7 +862,7 @@ export async function Doc2Fields(
             allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage, extractGeminiModel)
         }
     } else {
-        let classified: Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number }>
+        let classified: Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>
 
         let totalPages = 0
         let pdfDoc: PDFDocument | null = null
@@ -631,11 +906,11 @@ export async function Doc2Fields(
                     })
                 )
 
-                const perPage: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                const perPage: Array<{ id: string; page: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }> = []
                 perPageClassifications.forEach(({ classified, localUsage }, idx) => {
                     Object.assign(usage, addUsage(usage, localUsage))
                     for (const c of classified) {
-                        perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence })
+                        perPage.push({ id: c.id, page: idx + 1, partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate })
                     }
                 })
 
@@ -643,12 +918,18 @@ export async function Doc2Fields(
                 // the minimum per-page confidence across the merged span so a
                 // single low-confidence page in a multi-page block keeps the
                 // whole range below threshold.
+                //
+                // Phase 2 — for inline `data`/`docdate`, take the first page's
+                // values across the merged range. For multi-page same-doctype
+                // ranges (e.g. annual declarations), per-page snapshots are
+                // duplicates of the same document; for multi-doctype mixes
+                // they're already split into separate per-page entries here.
                 classified = []
                 for (let i = 0; i < perPage.length; i++) {
                     const entry = perPage[i]
                     // Cédula entries have partId and shouldn't be merged
                     if (entry.partId) {
-                        classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
+                        classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}), ...(entry.data ? { data: entry.data } : {}), ...(entry.docdate ? { docdate: entry.docdate } : {}) })
                         continue
                     }
                     let end = entry.page
@@ -664,7 +945,7 @@ export async function Doc2Fields(
                         if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
                         i++
                     }
-                    classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
+                    classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}), ...(entry.data ? { data: entry.data } : {}), ...(entry.docdate ? { docdate: entry.docdate } : {}) })
                 }
             } else {
                 classified = await classifyDocument(base64, mimetype, aiModel, isPDF, doctypes, usage, classifyGeminiModel)
@@ -778,17 +1059,17 @@ export async function Doc2Fields(
                         // Merge adjacent same-doctype pages into ranges, same
                         // policy as phase 1 (cédula entries with partId stay
                         // single-page).
-                        const subPerPageFlat: Array<{ id: string; page: number; partId?: string; confidence?: number }> = []
+                        const subPerPageFlat: Array<{ id: string; page: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }> = []
                         subPerPage.forEach(({ c, localUsage, page }) => {
                             Object.assign(usage, addUsage(usage, localUsage))
                             for (const entry of c) {
-                                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence })
+                                subPerPageFlat.push({ id: entry.id, page, partId: entry.partId, confidence: entry.confidence, data: entry.data, docdate: entry.docdate })
                             }
                         })
                         for (let i = 0; i < subPerPageFlat.length; i++) {
                             const entry = subPerPageFlat[i]
                             if (entry.partId) {
-                                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}) })
+                                classified.push({ id: entry.id, start: entry.page, end: entry.page, partId: entry.partId, ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}), ...(entry.data ? { data: entry.data } : {}), ...(entry.docdate ? { docdate: entry.docdate } : {}) })
                                 continue
                             }
                             let end = entry.page
@@ -804,7 +1085,7 @@ export async function Doc2Fields(
                                 if (next !== undefined) minConf = minConf === undefined ? next : Math.min(minConf, next)
                                 i++
                             }
-                            classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}) })
+                            classified.push({ id: entry.id, start: entry.page, end, ...(minConf !== undefined ? { confidence: minConf } : {}), ...(entry.data ? { data: entry.data } : {}), ...(entry.docdate ? { docdate: entry.docdate } : {}) })
                         }
                     } else {
                         // Fallback (slicing failed): one full-PDF call, but only
@@ -823,11 +1104,15 @@ export async function Doc2Fields(
             }
         }
 
-        // Group by doc type for Pass 2 — keep confidence alongside each entry.
-        const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string; confidence?: number }>>()
+        // Group by doc type for Pass 2 — keep confidence + Phase 2 inline
+        // `data`/`docdate` alongside each entry. The post-extraction merge
+        // falls back to inline values when `extractFields` returns empty so
+        // the schema-enforced classify payload isn't silently dropped on
+        // extract failures.
+        const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>>()
         for (const c of classified) {
             const existing = byType.get(c.id) || []
-            existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence })
+            existing.push({ start: c.start, end: c.end, partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate })
             byType.set(c.id, existing)
         }
 
@@ -895,6 +1180,11 @@ export async function Doc2Fields(
                 extractedByType.get(n.id)!.push(n)
             }
 
+            // Phase 2 helper — non-empty data check. `{}` from extract should
+            // not shadow a classifier-inline payload that did populate fields.
+            const hasFields = (d: Record<string, unknown> | null | undefined): boolean =>
+                !!d && typeof d === 'object' && Object.keys(d).length > 0
+
             allRawDocs = []
             for (const [typeId, classEntries] of byType) {
                 if (!mapById[typeId]) continue
@@ -914,6 +1204,10 @@ export async function Doc2Fields(
                     }
                     const classConfidences = sortedClass.map(c => c.confidence).filter((v): v is number => v !== undefined)
                     const minConf = classConfidences.length > 0 ? Math.min(...classConfidences) : undefined
+                    // When the extract pass split a merged range into multiple
+                    // sub-docs, no single classifier-inline payload aligns 1:1.
+                    // Inline-data fallback can't safely apply here — keep the
+                    // existing extract-only behavior.
                     for (const ext of sortedExtracted) {
                         const start = ext.start ?? classRange.start
                         const end = ext.end ?? start
@@ -931,10 +1225,19 @@ export async function Doc2Fields(
                         const cls = sortedClass[i]
                         const ext = i < sortedExtracted.length ? sortedExtracted[i] : null
 
+                        // Phase 2 fallback: if extractFields returned nothing
+                        // useful for this entry, reach back to the classifier
+                        // -inline payload (schema-enforced via Phase 2 data
+                        // schemas) so the upload doesn't lose its fields.
+                        const data = hasFields(ext?.data as Record<string, unknown> | undefined)
+                            ? (ext!.data as Record<string, unknown>)
+                            : (cls.data || {})
+                        const docdate = ext?.docdate || cls.docdate || null
+
                         allRawDocs.push({
                             id: typeId,
-                            data: ext?.data || {},
-                            docdate: ext?.docdate || null,
+                            data,
+                            docdate,
                             ...(cls.confidence !== undefined ? { confidence: cls.confidence } : {}),
                             start: cls.start,
                             end: cls.end,

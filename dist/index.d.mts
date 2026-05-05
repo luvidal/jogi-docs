@@ -55,18 +55,35 @@ declare function detectCedulaSide(buffer: Buffer, mimetype: string, model?: Mode
     data?: object;
 }>;
 /**
- * Build the Gemini `responseSchema` (Phase 1, shape only) for the multi-page classifier.
+ * Hand-written `data` object schema per doctype. Returns `null` for doctypes
+ * whose data shape is still in flux — the responseSchema then falls them into
+ * the no-data fallback branch.
  *
- * - `id` is an enum over the candidate doctype list. Cuts off-list hallucinations at
- *   the model boundary instead of in `parseRawDocs`.
- * - `start` / `end` are integers (PDF only — single-image classify omits page ranges).
- * - `confidence` is a required number in `[0,1]` so downstream destructive-op gates
- *   always have a value to act on.
- * - `partId` is `front | back` and only emitted for multipart doctypes.
+ * Properties are nullable rather than required: a single missing field on a
+ * scanned document shouldn't make Gemini reject the entire response. Page
+ * coverage, overlap, and per-doctype sanity stay enforced app-side.
+ */
+declare function buildDataSchemaForDoctype(docTypeId: string): ResponseSchema | null;
+/**
+ * Build the Gemini `responseSchema` for the multi-page classifier.
  *
- * Per-doctype `data` object schemas are NOT included — that's Phase 2 (Step 8b in the
- * jogi `docs/plans/ocr-refactor.md`). The app still independently validates page
- * coverage, overlaps, request authorization, and per-doctype sanity.
+ * Phase 1 (shape) and Phase 2 (per-doctype `data`) are folded into one
+ * builder. Each branch in `documents.items.anyOf` is keyed on `id` (a
+ * single-value enum acts as the discriminator):
+ *
+ * - Doctypes in {@link DATA_SCHEMA_DOCTYPES} get a dedicated branch with
+ *   `data` (per-doctype object schema) and `docdate` (string, nullable).
+ * - Every other candidate doctype shares one fallback branch with no `data`
+ *   constraint — keeps the schema small and tolerant for unaudited shapes.
+ *
+ * Shape-level invariants (still enforced):
+ * - `id` is enum-restricted to the candidate doctype list.
+ * - `start`/`end` are integers (PDF only).
+ * - `confidence` is required and bounded `[0,1]`.
+ * - `partId` is the `front | back` enum, nullable.
+ *
+ * The app still independently validates page coverage, overlaps, request
+ * authorization, and per-doctype sanity.
  */
 declare function buildClassifyResponseSchema(doctypeIds: string[], isPDF: boolean): ResponseSchema;
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
@@ -202,4 +219,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
