@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
+import { configure } from '../src/config'
 import {
   getMultiPartConfig,
   isMultiPartDocType,
@@ -9,6 +10,26 @@ import {
   getPartLabel,
   partFilenameConditions,
 } from '../src/multipart'
+
+const fixtureDoctypes = {
+  'cedula-identidad': {
+    label: 'Cédula',
+    category: 'identidad',
+    definition: 'Cédula',
+    fields: [],
+    parts: ['Frente', 'Revés'],
+  },
+  'liquidacion-sueldo': {
+    label: 'Liquidación',
+    category: 'ingresos',
+    definition: 'Liquidación',
+    fields: [],
+  },
+}
+
+beforeAll(() => {
+  configure({ doctypes: fixtureDoctypes })
+})
 
 describe('multipart', () => {
   describe('getPartIdFromFilename', () => {

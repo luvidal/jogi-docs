@@ -1,4 +1,4 @@
-import { j as MultiPartConfig } from '../types-zUlJrZ5k.mjs';
+import { k as MultiPartConfig } from '../types-COSfEMg9.mjs';
 
 /**
  * Multi-Part Document Utilities

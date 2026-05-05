@@ -99,6 +99,8 @@ function getExpandedDoctypes() {
       graceDays: dt.graceDays,
       hasFechaVencimiento: dt.fields?.some((f) => f.key === "fecha_vencimiento") ?? false,
       multiInstance: dt.multiInstance,
+      pageAtomic: dt.pageAtomic,
+      extractScope: dt.extractScope,
       parts: dt.parts,
       contains: dt.contains,
       definition: dt.definition,

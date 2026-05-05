@@ -14,6 +14,8 @@ export interface FieldDef {
 
 export type DocFrequency = 'once' | 'monthly' | 'annual'
 
+export type ExtractScope = 'firstPage' | 'firstTwoPages' | 'selectedPages' | 'fullRange'
+
 export interface DoctypeField {
   [key: string]: string | number | boolean | object | any[] | null
 }
@@ -28,6 +30,8 @@ export interface Doctype {
   graceDays?: number
   hasFechaVencimiento: boolean
   multiInstance?: boolean
+  pageAtomic?: boolean
+  extractScope?: ExtractScope
   parts?: string[]
   contains?: string[]
   definition: string

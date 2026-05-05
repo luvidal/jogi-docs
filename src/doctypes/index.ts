@@ -23,6 +23,7 @@ export type {
   HowToObtain,
   FieldDef,
   DocFrequency,
+  ExtractScope,
   DoctypeField,
   Doctype,
   DoctypesMap,

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import {
+  configure,
   getDoctypesMap,
   getDoctypes,
   getDoctype,
@@ -7,13 +8,41 @@ import {
   isDoctypeValid,
   getDoctypesByCategory,
   getCategories,
-  getVisibleFieldKeys,
+  getInternalFieldKeys,
   getDocumentDefaults,
   isRecurring,
   isMultiInstanceDocType,
   applyDefaults,
   getDoctypesLegacyFormat,
-} from '../src/doctypes'
+} from '../src/doctypes/index'
+
+const stub = (label: string, category = 'general', freq = 'once', count = 1, extra: Record<string, unknown> = {}) => ({
+  label,
+  category,
+  freq,
+  count,
+  definition: label,
+  fields: [],
+  ...extra,
+})
+
+const fixtureDoctypes: Record<string, any> = {
+  'cedula-identidad': stub('Cédula', 'identidad', 'once', 1, {
+    parts: ['Frente', 'Revés'],
+    extractScope: 'firstPage',
+    fields: [{ key: 'rut', type: 'string', internal: true }],
+  }),
+  'liquidaciones-sueldo': stub('Liquidación', 'ingresos', 'monthly', 6, {
+    pageAtomic: true,
+    extractScope: 'firstPage',
+  }),
+  'padron': stub('Padrón', 'patrimonio', 'once', 1, { extractScope: 'firstPage' }),
+  'declaracion-anual-impuestos': stub('DAI', 'tributario', 'annual', 1),
+}
+
+beforeAll(() => {
+  configure({ doctypes: fixtureDoctypes })
+})
 
 describe('doctypes', () => {
   describe('getDoctypesMap', () => {
@@ -32,7 +61,7 @@ describe('doctypes', () => {
       expect(firstDoctype).toHaveProperty('instructions')
       expect(firstDoctype).toHaveProperty('fields')
       expect(firstDoctype).toHaveProperty('fieldDefs')
-      expect(firstDoctype).toHaveProperty('visibleFields')
+      expect(firstDoctype).toHaveProperty('internalFields')
       expect(firstDoctype).toHaveProperty('freq')
       expect(firstDoctype).toHaveProperty('count')
     })
@@ -41,6 +70,15 @@ describe('doctypes', () => {
       const map = getDoctypesMap()
       expect(map['cedula-identidad']).toBeDefined()
       expect(map['cedula-identidad'].parts).toEqual(['Frente', 'Revés'])
+    })
+
+    it('preserves host doctype policy fields', () => {
+      const map = getDoctypesMap()
+      expect(map['liquidaciones-sueldo'].pageAtomic).toBe(true)
+      expect(map['liquidaciones-sueldo'].extractScope).toBe('firstPage')
+      expect(map['cedula-identidad'].extractScope).toBe('firstPage')
+      expect(map['padron'].extractScope).toBe('firstPage')
+      expect(map['declaracion-anual-impuestos'].extractScope).toBeUndefined()
     })
   })
 
@@ -127,14 +165,13 @@ describe('doctypes', () => {
     })
   })
 
-  describe('getVisibleFieldKeys', () => {
-    it('returns visible fields for valid doctype', () => {
-      const keys = getVisibleFieldKeys('cedula-identidad')
-      expect(Array.isArray(keys)).toBe(true)
+  describe('getInternalFieldKeys', () => {
+    it('returns internal fields for valid doctype', () => {
+      expect(getInternalFieldKeys('cedula-identidad')).toEqual(['rut'])
     })
 
     it('returns empty array for non-existent doctype', () => {
-      expect(getVisibleFieldKeys('non-existent')).toEqual([])
+      expect(getInternalFieldKeys('non-existent')).toEqual([])
     })
   })
 

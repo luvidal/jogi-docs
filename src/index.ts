@@ -35,4 +35,5 @@ export type {
   CedulaFile,
   MergedCedula,
   AllowedDoctypeIds,
+  ExtractScope,
 } from './types'

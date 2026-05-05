@@ -9,6 +9,7 @@ interface FieldDef {
     ai?: string;
 }
 type DocFrequency = 'once' | 'monthly' | 'annual';
+type ExtractScope = 'firstPage' | 'firstTwoPages' | 'selectedPages' | 'fullRange';
 interface DoctypeField {
     [key: string]: string | number | boolean | object | any[] | null;
 }
@@ -22,6 +23,8 @@ interface Doctype {
     graceDays?: number;
     hasFechaVencimiento: boolean;
     multiInstance?: boolean;
+    pageAtomic?: boolean;
+    extractScope?: ExtractScope;
     parts?: string[];
     contains?: string[];
     definition: string;
@@ -111,4 +114,4 @@ interface MergedCedula {
     foto_base64: string | null;
 }
 
-export type { AllowedDoctypeIds as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, GeminiModels as a, CedulaFile as b, MergedCedula as c, AIUsage as d, ExtractionDocument as e, Doctype as f, DoctypeField as g, DoctypesMap as h, DocRequirement as i, MultiPartConfig as j };
+export type { AllowedDoctypeIds as A, CompositeCedulaResult as C, DocFrequency as D, ExtractionResult as E, FieldDef as F, GroundedResult as G, HowToObtain as H, ModelArg as M, GeminiModels as a, CedulaFile as b, MergedCedula as c, AIUsage as d, ExtractScope as e, ExtractionDocument as f, Doctype as g, DoctypeField as h, DoctypesMap as i, DocRequirement as j, MultiPartConfig as k };

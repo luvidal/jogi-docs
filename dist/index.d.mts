@@ -1,6 +1,6 @@
 export { D as DocProcessorLogger, c as configure } from './config-CySXFcye.mjs';
-import { G as GroundedResult, M as ModelArg, a as GeminiModels, A as AllowedDoctypeIds, E as ExtractionResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-zUlJrZ5k.mjs';
-export { d as AIUsage, e as ExtractionDocument } from './types-zUlJrZ5k.mjs';
+import { G as GroundedResult, M as ModelArg, a as GeminiModels, A as AllowedDoctypeIds, E as ExtractionResult, C as CompositeCedulaResult, b as CedulaFile, c as MergedCedula } from './types-COSfEMg9.mjs';
+export { d as AIUsage, e as ExtractScope, f as ExtractionDocument } from './types-COSfEMg9.mjs';
 
 type ResponseSchema = Record<string, unknown>;
 /**

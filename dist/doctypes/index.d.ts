@@ -1,6 +1,6 @@
 export { c as configure } from '../config-CySXFcye.js';
-import { D as DocFrequency, f as Doctype, g as DoctypeField, h as DoctypesMap, i as DocRequirement } from '../types-zUlJrZ5k.js';
-export { F as FieldDef, H as HowToObtain } from '../types-zUlJrZ5k.js';
+import { D as DocFrequency, g as Doctype, h as DoctypeField, i as DoctypesMap, j as DocRequirement } from '../types-COSfEMg9.js';
+export { e as ExtractScope, F as FieldDef, H as HowToObtain } from '../types-COSfEMg9.js';
 
 /**
  * Document types helper library

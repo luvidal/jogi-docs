@@ -4,9 +4,9 @@
  */
 
 import { getRawDoctypes } from './config'
-import type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement } from './types'
+import type { HowToObtain, FieldDef, DocFrequency, ExtractScope, DoctypeField, Doctype, DoctypesMap, DocRequirement } from './types'
 
-export type { HowToObtain, FieldDef, DocFrequency, DoctypeField, Doctype, DoctypesMap, DocRequirement }
+export type { HowToObtain, FieldDef, DocFrequency, ExtractScope, DoctypeField, Doctype, DoctypesMap, DocRequirement }
 
 // Raw format from JSON (internal only)
 interface RawDoctype {
@@ -18,6 +18,8 @@ interface RawDoctype {
   maxAge?: number
   graceDays?: number
   multiInstance?: boolean
+  pageAtomic?: boolean
+  extractScope?: ExtractScope
   parts?: string[]
   contains?: string[]
   definition: string
@@ -115,6 +117,8 @@ function getExpandedDoctypes(): DoctypesMap {
       graceDays: dt.graceDays,
       hasFechaVencimiento: dt.fields?.some(f => f.key === 'fecha_vencimiento') ?? false,
       multiInstance: dt.multiInstance,
+      pageAtomic: dt.pageAtomic,
+      extractScope: dt.extractScope,
       parts: dt.parts,
       contains: dt.contains,
       definition: dt.definition,
