@@ -115,17 +115,20 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         expect(ids.length).toBeGreaterThan(5)
     })
 
-    it('forced doctype bypasses narrowing — extract path runs without classify schema', async () => {
+    it('forced doctype bypasses narrowing — extract path uses the forced doctype schema', async () => {
         const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', 'cedula-identidad', {
             allowedDoctypeIds: ['liquidaciones-sueldo'],
             geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
         })
-        // The forced path calls extractFields, not classifyDocument — so the
-        // sixth arg (schema) is undefined on this call.
+        // The forced path calls extractFields, not classifyDocument, so it
+        // ignores narrowing. Covered forced doctypes still get the Pass 2
+        // extractor schema, with rangeless PDF start/end left optional.
         const firstCall = mock2vision.mock.calls[0]
         expect(firstCall).toBeTruthy()
-        expect(firstCall[5]).toBeUndefined()
+        const item = firstCall[5]?.properties?.documents?.items
+        expect(item?.properties?.id?.enum).toEqual(['cedula-identidad'])
+        expect(item?.required).toEqual(['id', 'data'])
     })
 
     it('preserves a partial container range in mixed PDFs', async () => {

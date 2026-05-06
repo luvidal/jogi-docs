@@ -434,6 +434,7 @@ __export(ocr_exports, {
   buildCacheKey: () => buildCacheKey,
   buildClassifyResponseSchema: () => buildClassifyResponseSchema,
   buildDataSchemaForDoctype: () => buildDataSchemaForDoctype,
+  buildExtractResponseSchema: () => buildExtractResponseSchema,
   detectCedulaSide: () => detectCedulaSide,
   extractPdfPageAsImage: () => extractPdfPageAsImage,
   getPromptVersion: () => getPromptVersion,
@@ -448,7 +449,7 @@ function addUsage(total, add) {
   };
 }
 function getPromptVersion() {
-  return crypto.createHash("sha256").update(JSON.stringify(getDoctypes())).update(PROMPT_TEMPLATE_VERSION).digest("hex").slice(0, 12);
+  return crypto.createHash("sha256").update(JSON.stringify(getDoctypes())).update(PROMPT_TEMPLATE_VERSION).update(JSON.stringify(getSchemaVersionPayload())).digest("hex").slice(0, 12);
 }
 function buildCacheKey(fileHash, model, promptVersion) {
   return crypto.createHash("sha256").update(fileHash + model + promptVersion).digest("hex").slice(0, 32);
@@ -864,6 +865,82 @@ function buildClassifyResponseSchema(doctypeIds, isPDF) {
     required: ["documents"]
   };
 }
+function buildExtractResponseSchema(docTypeId, isPDF, entries) {
+  if (!DATA_SCHEMA_DOCTYPES.has(docTypeId)) return null;
+  const dataSchema = buildDataSchemaForDoctype(docTypeId);
+  if (!dataSchema) return null;
+  const hasConcreteRanges = entriesHaveConcreteRanges(isPDF, entries);
+  const properties = {
+    id: { type: "STRING", enum: [docTypeId] },
+    data: dataSchema,
+    docdate: { type: "STRING", nullable: true },
+    partId: { type: "STRING", enum: ["front", "back"], nullable: true }
+  };
+  const required = ["id", "data"];
+  if (isPDF) {
+    properties.start = { type: "INTEGER", minimum: 1 };
+    properties.end = { type: "INTEGER", minimum: 1 };
+    if (hasConcreteRanges) required.push("start", "end");
+  }
+  return {
+    type: "OBJECT",
+    properties: {
+      documents: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties,
+          required
+        }
+      }
+    },
+    required: ["documents"]
+  };
+}
+function entriesHaveConcreteRanges(isPDF, entries) {
+  return isPDF && entries.length > 0 && entries.every(
+    (e) => Number.isInteger(e.start) && Number.isInteger(e.end) && e.start >= 1 && e.end >= e.start
+  );
+}
+function getSchemaVersionPayload() {
+  const doctypeIds = getDoctypes().map((dt) => dt.id);
+  const extractSchemas = [...DATA_SCHEMA_DOCTYPES].sort().map((id) => ({
+    id,
+    image: buildExtractResponseSchema(id, false, [{}]),
+    pdfRanged: buildExtractResponseSchema(id, true, [{ start: 1, end: 1 }]),
+    pdfRangeless: buildExtractResponseSchema(id, true, [{}])
+  }));
+  return {
+    classifyImage: buildClassifyResponseSchema(doctypeIds, false),
+    classifyPdf: buildClassifyResponseSchema(doctypeIds, true),
+    extractSchemas
+  };
+}
+function isPlainRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function isMergeGap(value) {
+  if (value === void 0 || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (isPlainRecord(value)) return Object.keys(value).length === 0;
+  return false;
+}
+function mergeFieldValue(pass1, pass2) {
+  if (isPlainRecord(pass1) && isPlainRecord(pass2)) {
+    return mergePassData(pass1, pass2);
+  }
+  return isMergeGap(pass2) ? pass1 : pass2;
+}
+function mergePassData(pass1, pass2) {
+  const first = isPlainRecord(pass1) ? pass1 : {};
+  const second = isPlainRecord(pass2) ? pass2 : {};
+  const merged = { ...first };
+  for (const key of Object.keys(second)) {
+    merged[key] = mergeFieldValue(first[key], second[key]);
+  }
+  return merged;
+}
 async function classifyDocument(base64, mimetype, model, isPDF, doctypes, usageAccum, geminiModel) {
   const typeList = doctypes.map((dt) => {
     const base = `\u2022 ${dt.id}: ${dt.definition || dt.label}`;
@@ -915,34 +992,6 @@ ${typeList}`;
     };
   }).filter((d) => d.id);
 }
-async function classifyAndExtractImage(base64, mimetype, model, doctypes, usageAccum, geminiModel) {
-  const typeList = doctypes.map((dt) => {
-    const fields = JSON.stringify(dt.fieldDefs.map((f) => {
-      const entry = { key: f.key, type: f.type };
-      if (f.ai) entry.ai = f.ai;
-      return entry;
-    }));
-    return `\u2022 ${dt.id}: ${dt.definition || dt.label}
-  fields: ${fields}`;
-  }).join("\n");
-  const prompt = `Identifica y extrae los campos de este documento chileno.
-Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Si la imagen contiene AMBAS caras de una c\xE9dula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
-Para c\xE9dula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
-Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0,"data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
-- "confidence": 0.0-1.0, qu\xE9 tan seguro est\xE1s del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
-- "docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido o descargado. Ej: liquidaci\xF3n de junio 2025 emitida el 25 mayo \u2192 2025-06-01. Resumen anual 2024 \u2192 2024-01-01. Para certificados sin per\xEDodo (c\xE9dula, nacimiento, matrimonio), usar la fecha de emisi\xF3n. Formato YYYY-MM-DD
-- "partId": solo para c\xE9dula-identidad
-- Campos type:"num": devuelve n\xFAmero entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
-- No inventes datos salvo campos con instrucci\xF3n "ai"
-- Si no est\xE1s seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
-- Solo JSON, sin markdown
-Tipos v\xE1lidos:
-${typeList}`;
-  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
-  if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
-  return parseRawDocs(vr.text);
-}
 async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries, usageAccum, geminiModel) {
   const fields = JSON.stringify(doctype.fieldDefs.map((f) => {
     const entry = { key: f.key, type: f.type };
@@ -952,11 +1001,12 @@ async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype,
   const isCedula = docTypeId === "cedula-identidad";
   const cedulaBbox = isCedula ? `
 Si partId es "front", incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza completa, cuello y hombros.` : "";
-  const pageHint = isPDF && entries.length > 0 ? `Documentos detectados en p\xE1ginas: ${entries.map((e) => e.partId ? `${e.start}-${e.end} (${e.partId})` : `${e.start}-${e.end}`).join(", ")}.` : "";
+  const hasConcreteRanges = entriesHaveConcreteRanges(isPDF, entries);
+  const pageHint = hasConcreteRanges ? `Documentos detectados en p\xE1ginas: ${entries.map((e) => e.partId ? `${e.start}-${e.end} (${e.partId})` : `${e.start}-${e.end}`).join(", ")}.` : "";
   const dateInstruction = doctype.dateHint ? `"docdate": ${doctype.dateHint}. Formato YYYY-MM-DD` : `"docdate": la fecha a la que CORRESPONDE la informaci\xF3n, NO cu\xE1ndo fue emitido. Para certificados sin per\xEDodo, usar fecha de emisi\xF3n. Formato YYYY-MM-DD`;
   const prompt = `Extrae los campos de "${doctype.label}" (id: "${docTypeId}").
 ${pageHint}
-Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${isPDF ? ',"start":N,"end":N' : ""}${isCedula ? ',"partId":"front|back"' : ""}}]}
+Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${hasConcreteRanges ? ',"start":N,"end":N' : ""}${isCedula ? ',"partId":"front|back"' : ""}}]}
 Campos: ${fields}
 ${cedulaBbox}
 - ${dateInstruction}
@@ -964,7 +1014,8 @@ ${cedulaBbox}
 - No inventes datos salvo campos con instrucci\xF3n "ai"
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`;
-  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel);
+  const schema = buildExtractResponseSchema(docTypeId, isPDF, entries);
+  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema || void 0);
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   return parseRawDocs(vr.text);
 }
@@ -986,53 +1037,49 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
     if (!doctype) return { documents: [] };
     allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage, extractGeminiModel);
   } else if (isImage) {
-    if (classifyGeminiModel) {
-      const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel);
-      if (classified.length === 0) return { documents: [] };
-      const byType = /* @__PURE__ */ new Map();
-      for (const c of classified) {
-        const list = byType.get(c.id) || [];
-        list.push({ partId: c.partId, confidence: c.confidence });
-        byType.set(c.id, list);
+    const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel);
+    if (classified.length === 0) return { documents: [] };
+    const byType = /* @__PURE__ */ new Map();
+    for (const c of classified) {
+      const list = byType.get(c.id) || [];
+      list.push({ partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate });
+      byType.set(c.id, list);
+    }
+    const extractionResults = await Promise.all(
+      Array.from(byType.entries()).map(async ([typeId, entries]) => {
+        const dt = mapById[typeId];
+        if (!dt) return { typeId, results: [] };
+        const results = await extractFields(
+          base64,
+          mimetype,
+          aiModel,
+          false,
+          typeId,
+          dt,
+          entries.map((e) => ({ partId: e.partId })),
+          usage,
+          extractGeminiModel
+        );
+        return { typeId, results };
+      })
+    );
+    const extractedByType = /* @__PURE__ */ new Map();
+    for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results);
+    allRawDocs = [];
+    for (const [typeId, classEntries] of byType) {
+      if (!mapById[typeId]) continue;
+      const ext = extractedByType.get(typeId) || [];
+      for (let i = 0; i < classEntries.length; i++) {
+        const cls = classEntries[i];
+        const e = i < ext.length ? normalizeDoc(ext[i]) : null;
+        allRawDocs.push({
+          id: typeId,
+          data: mergePassData(cls.data, e?.data),
+          docdate: e?.docdate || cls.docdate || null,
+          ...cls.confidence !== void 0 ? { confidence: cls.confidence } : {},
+          ...cls.partId ? { partId: cls.partId } : {}
+        });
       }
-      const extractionResults = await Promise.all(
-        Array.from(byType.entries()).map(async ([typeId, entries]) => {
-          const dt = mapById[typeId];
-          if (!dt) return { typeId, results: [] };
-          const results = await extractFields(
-            base64,
-            mimetype,
-            aiModel,
-            false,
-            typeId,
-            dt,
-            entries.map((e) => ({ partId: e.partId })),
-            usage,
-            extractGeminiModel
-          );
-          return { typeId, results };
-        })
-      );
-      const extractedByType = /* @__PURE__ */ new Map();
-      for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results);
-      allRawDocs = [];
-      for (const [typeId, classEntries] of byType) {
-        if (!mapById[typeId]) continue;
-        const ext = extractedByType.get(typeId) || [];
-        for (let i = 0; i < classEntries.length; i++) {
-          const cls = classEntries[i];
-          const e = i < ext.length ? normalizeDoc(ext[i]) : null;
-          allRawDocs.push({
-            id: typeId,
-            data: e?.data || {},
-            docdate: e?.docdate || null,
-            ...cls.confidence !== void 0 ? { confidence: cls.confidence } : {},
-            ...cls.partId ? { partId: cls.partId } : {}
-          });
-        }
-      }
-    } else {
-      allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage, extractGeminiModel);
     }
   } else {
     let classified;
@@ -1255,7 +1302,6 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
         if (!extractedByType.has(n.id)) extractedByType.set(n.id, []);
         extractedByType.get(n.id).push(n);
       }
-      const hasFields = (d) => !!d && typeof d === "object" && Object.keys(d).length > 0;
       allRawDocs = [];
       for (const [typeId, classEntries] of byType) {
         if (!mapById[typeId]) continue;
@@ -1284,7 +1330,7 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
           for (let i = 0; i < sortedClass.length; i++) {
             const cls = sortedClass[i];
             const ext = i < sortedExtracted.length ? sortedExtracted[i] : null;
-            const data = hasFields(ext?.data) ? ext.data : cls.data || {};
+            const data = mergePassData(cls.data, ext?.data);
             const docdate = ext?.docdate || cls.docdate || null;
             allRawDocs.push({
               id: typeId,
@@ -1367,7 +1413,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v10";
+    PROMPT_TEMPLATE_VERSION = "v11";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
@@ -1775,6 +1821,7 @@ exports.Doc2Fields = Doc2Fields;
 exports.buildCacheKey = buildCacheKey;
 exports.buildClassifyResponseSchema = buildClassifyResponseSchema;
 exports.buildDataSchemaForDoctype = buildDataSchemaForDoctype;
+exports.buildExtractResponseSchema = buildExtractResponseSchema;
 exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
 exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;

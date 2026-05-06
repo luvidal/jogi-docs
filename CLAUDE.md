@@ -88,6 +88,12 @@ source /Users/avd/GitHub/jogi/.env.local && npx tsx dev/test-cedula.ts <cedula-i
 
 Use `npx tsc --noEmit` for type checking. Run `npm test` before committing.
 
+## Extraction Cache Contract
+
+`PROMPT_TEMPLATE_VERSION` must change whenever prompts or response schemas change. `getPromptVersion()` hashes the configured doctypes plus classifier/extractor schema payloads, so schema-only hardening invalidates stale `system.ai_caches` rows without relying only on a manual version bump.
+
+For covered high-stakes doctypes, both Pass 1 classification and Pass 2 extraction use Gemini `responseSchema`. Pass 2 remains the preferred source because it sees the focused slice, but `ocr.ts` merges at field level: Pass 2 present values win, and Pass 1 fills missing/null/empty gaps.
+
 ## Consumer Integration
 
 Consumed by Jogi via GitHub reference:

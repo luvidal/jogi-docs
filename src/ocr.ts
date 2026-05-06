@@ -6,8 +6,8 @@
  *
  * ## Extraction Strategy
  *
- * ### Images → Single-pass (classifyAndExtractImage)
- * One API call that classifies AND extracts fields simultaneously.
+ * ### Images → Split-pass (classifyDocument → extractFields)
+ * Same schema contract as PDFs; images just omit page ranges.
  *
  * ### PDFs → Multi-pass (detectDocumentBoundaries → classifyDocument → extractFields)
  * Pass 0 — Split: detect document boundaries in multi-doc PDFs (no doctype knowledge)
@@ -39,7 +39,8 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 
 // ─── Cache Helpers ───────────────────────────────────────────────────────────
 
-// Bump this string whenever prompt templates change (classifyDocument, classifyAndExtractImage, extractFields)
+// Bump this string whenever prompt templates or schema builders change
+// (classifyDocument, extractFields).
 // v7: classifier multi-page branch is now schema-enforced via Gemini `responseSchema`
 // (Phase 1, shape only — `id` enum over known doctypes, `start`/`end` integers,
 // required `confidence` 0–1, `partId` enum on multipart entries). Containers still
@@ -66,7 +67,13 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // falls back to classify-inline data when extractFields returns empty so the
 // inline payload isn't silently dropped on extract failures. v9 cache entries
 // are invalidated by the bump (new payload shape, new prompt).
-const PROMPT_TEMPLATE_VERSION = 'v10'
+// v11: Pass 2 `extractFields` is schema-enforced for the same six covered
+// doctypes through `buildExtractResponseSchema`. Forced/rangeless extraction
+// keeps PDF start/end optional. Images now use the split classify/extract path,
+// and the Pass 1/Pass 2 merge is field-level: Pass 2 wins for present values,
+// Pass 1 fills missing/null/empty gaps. The cache key also hashes classifier
+// and extractor schema output so schema-only edits invalidate stale AI caches.
+const PROMPT_TEMPLATE_VERSION = 'v11'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -76,6 +83,7 @@ export function getPromptVersion(): string {
     return createHash('sha256')
         .update(JSON.stringify(getDoctypes()))
         .update(PROMPT_TEMPLATE_VERSION)
+        .update(JSON.stringify(getSchemaVersionPayload()))
         .digest('hex')
         .slice(0, 12)
 }
@@ -616,6 +624,108 @@ export function buildClassifyResponseSchema(
     }
 }
 
+export function buildExtractResponseSchema(
+    docTypeId: string,
+    isPDF: boolean,
+    entries: Array<{ start?: number; end?: number; partId?: string }>,
+): ResponseSchema | null {
+    if (!DATA_SCHEMA_DOCTYPES.has(docTypeId)) return null
+    const dataSchema = buildDataSchemaForDoctype(docTypeId)
+    if (!dataSchema) return null
+
+    const hasConcreteRanges = entriesHaveConcreteRanges(isPDF, entries)
+
+    const properties: Record<string, ResponseSchema> = {
+        id: { type: 'STRING', enum: [docTypeId] },
+        data: dataSchema,
+        docdate: { type: 'STRING', nullable: true },
+        partId: { type: 'STRING', enum: ['front', 'back'], nullable: true },
+    }
+    const required = ['id', 'data']
+
+    if (isPDF) {
+        properties.start = { type: 'INTEGER', minimum: 1 }
+        properties.end = { type: 'INTEGER', minimum: 1 }
+        if (hasConcreteRanges) required.push('start', 'end')
+    }
+
+    return {
+        type: 'OBJECT',
+        properties: {
+            documents: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties,
+                    required,
+                },
+            },
+        },
+        required: ['documents'],
+    }
+}
+
+function entriesHaveConcreteRanges(
+    isPDF: boolean,
+    entries: Array<{ start?: number; end?: number; partId?: string }>,
+): boolean {
+    return isPDF && entries.length > 0 && entries.every(e =>
+        Number.isInteger(e.start) &&
+        Number.isInteger(e.end) &&
+        (e.start as number) >= 1 &&
+        (e.end as number) >= (e.start as number)
+    )
+}
+
+function getSchemaVersionPayload(): unknown {
+    const doctypeIds = getDoctypes().map(dt => dt.id)
+    const extractSchemas = [...DATA_SCHEMA_DOCTYPES].sort().map(id => ({
+        id,
+        image: buildExtractResponseSchema(id, false, [{}]),
+        pdfRanged: buildExtractResponseSchema(id, true, [{ start: 1, end: 1 }]),
+        pdfRangeless: buildExtractResponseSchema(id, true, [{}]),
+    }))
+    return {
+        classifyImage: buildClassifyResponseSchema(doctypeIds, false),
+        classifyPdf: buildClassifyResponseSchema(doctypeIds, true),
+        extractSchemas,
+    }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isMergeGap(value: unknown): boolean {
+    if (value === undefined || value === null) return true
+    if (typeof value === 'string') return value.trim() === ''
+    if (Array.isArray(value)) return value.length === 0
+    if (isPlainRecord(value)) return Object.keys(value).length === 0
+    return false
+}
+
+function mergeFieldValue(pass1: unknown, pass2: unknown): unknown {
+    if (isPlainRecord(pass1) && isPlainRecord(pass2)) {
+        return mergePassData(pass1, pass2)
+    }
+    return isMergeGap(pass2) ? pass1 : pass2
+}
+
+function mergePassData(
+    pass1: Record<string, unknown> | null | undefined,
+    pass2: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+    const first = isPlainRecord(pass1) ? pass1 : {}
+    const second = isPlainRecord(pass2) ? pass2 : {}
+    const merged: Record<string, unknown> = { ...first }
+
+    for (const key of Object.keys(second)) {
+        merged[key] = mergeFieldValue(first[key], second[key])
+    }
+
+    return merged
+}
+
 async function classifyDocument(
     base64: string, mimetype: string, model: AiModel, isPDF: boolean,
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
@@ -689,43 +799,6 @@ ${typeList}`
     }).filter((d: any) => d.id)
 }
 
-// ─── Single-pass: Classify + Extract for images ─────────────────────────────
-
-async function classifyAndExtractImage(
-    base64: string, mimetype: string, model: AiModel,
-    doctypes: Array<{ id: string; label: string; definition: string; fieldDefs: any[] }>,
-    usageAccum?: AIUsage,
-    geminiModel?: string,
-): Promise<any[]> {
-    const typeList = doctypes.map(dt => {
-        const fields = JSON.stringify(dt.fieldDefs.map((f: any) => {
-            const entry: any = { key: f.key, type: f.type }
-            if (f.ai) entry.ai = f.ai
-            return entry
-        }))
-        return `• ${dt.id}: ${dt.definition || dt.label}\n  fields: ${fields}`
-    }).join('\n')
-
-    const prompt = `Identifica y extrae los campos de este documento chileno.
-Si la imagen NO corresponde a ninguno de los tipos listados abajo, devuelve {"documents":[]}.
-Si la imagen contiene AMBAS caras de una cédula (frente y reverso apilados), devuelve DOS elementos con "partId": "front" y "back".
-Para cédula front, incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza, cuello y hombros.
-Devuelve JSON: {"documents":[{"id":"tipo-id","confidence":0.0-1.0,"data":{...},"docdate":"YYYY-MM-DD","partId":"front|back"}]}
-- "confidence": 0.0-1.0, qué tan seguro estás del tipo. 1.0 = totalmente seguro; 0.7 = duda menor; <0.5 = devuelve {"documents":[]}.
-- "docdate": la fecha a la que CORRESPONDE la información, NO cuándo fue emitido o descargado. Ej: liquidación de junio 2025 emitida el 25 mayo → 2025-06-01. Resumen anual 2024 → 2024-01-01. Para certificados sin período (cédula, nacimiento, matrimonio), usar la fecha de emisión. Formato YYYY-MM-DD
-- "partId": solo para cédula-identidad
-- Campos type:"num": devuelve número entero sin separador de miles. En Chile el punto es separador de miles (NO decimal): $558.376 = 558376, $1.923 = 1923, $95.032.491 = 95032491
-- No inventes datos salvo campos con instrucción "ai"
-- Si no estás seguro del tipo, devuelve {"documents":[]}. Es mejor no clasificar que clasificar mal.
-- Solo JSON, sin markdown
-Tipos válidos:
-${typeList}`
-
-    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
-    if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
-    return parseRawDocs(vr.text)
-}
-
 // ─── Pass 2: Extract fields ──────────────────────────────────────────────────
 
 async function extractFields(
@@ -745,7 +818,8 @@ async function extractFields(
     const cedulaBbox = isCedula ? `
 Si partId es "front", incluye "foto_bbox" en "data" con coordenadas (0-100%) de la foto: {x, y, width, height}. Incluye cabeza completa, cuello y hombros.` : ''
 
-    const pageHint = isPDF && entries.length > 0
+    const hasConcreteRanges = entriesHaveConcreteRanges(isPDF, entries)
+    const pageHint = hasConcreteRanges
         ? `Documentos detectados en páginas: ${entries.map(e => e.partId ? `${e.start}-${e.end} (${e.partId})` : `${e.start}-${e.end}`).join(', ')}.`
         : ''
 
@@ -755,7 +829,7 @@ Si partId es "front", incluye "foto_bbox" en "data" con coordenadas (0-100%) de 
 
     const prompt = `Extrae los campos de "${doctype.label}" (id: "${docTypeId}").
 ${pageHint}
-Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${isPDF ? ',"start":N,"end":N' : ''}${isCedula ? ',"partId":"front|back"' : ''}}]}
+Devuelve JSON: {"documents":[{"id":"${docTypeId}","data":{...},"docdate":"YYYY-MM-DD"${hasConcreteRanges ? ',"start":N,"end":N' : ''}${isCedula ? ',"partId":"front|back"' : ''}}]}
 Campos: ${fields}
 ${cedulaBbox}
 - ${dateInstruction}
@@ -764,7 +838,8 @@ ${cedulaBbox}
 - Distingue entre CERTIFICADO (emitido) y FORMULARIO (para llenar)
 - Solo JSON, sin markdown`
 
-    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel)
+    const schema = buildExtractResponseSchema(docTypeId, isPDF, entries)
+    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema || undefined)
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     return parseRawDocs(vr.text)
 }
@@ -800,10 +875,9 @@ export async function Doc2Fields(
     const aiModel = toAiModel(model)
     const usage: AIUsage = {}
 
-    // Per-phase model overrides (Gemini route only). When `classify` is set,
-    // the image path uses split-mode (classify call + extract call) instead of
-    // the single-pass `classifyAndExtractImage`. PDFs already split, so we
-    // just route each call to the right model.
+    // Per-phase model overrides (Gemini route only). Images and PDFs both use
+    // split-mode now so covered doctypes get the same schema-enforced Pass 2
+    // extraction contract. We just route each call to the right model.
     const classifyGeminiModel = options?.geminiModels?.classify
     const extractGeminiModel = options?.geminiModels?.extract
 
@@ -814,52 +888,47 @@ export async function Doc2Fields(
         if (!doctype) return { documents: [] }
         allRawDocs = await extractFields(base64, mimetype, aiModel, isPDF, forcedDoctypeId, doctype, [{}], usage, extractGeminiModel)
     } else if (isImage) {
-        if (classifyGeminiModel) {
-            // Split-model path: stronger classifier, cheap extractor.
-            const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel)
-            if (classified.length === 0) return { documents: [] }
+        const classified = await classifyDocument(base64, mimetype, aiModel, false, doctypes, usage, classifyGeminiModel)
+        if (classified.length === 0) return { documents: [] }
 
-            const byType = new Map<string, Array<{ partId?: string; confidence?: number }>>()
-            for (const c of classified) {
-                const list = byType.get(c.id) || []
-                list.push({ partId: c.partId, confidence: c.confidence })
-                byType.set(c.id, list)
-            }
+        const byType = new Map<string, Array<{ partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>>()
+        for (const c of classified) {
+            const list = byType.get(c.id) || []
+            list.push({ partId: c.partId, confidence: c.confidence, data: c.data, docdate: c.docdate })
+            byType.set(c.id, list)
+        }
 
-            const extractionResults = await Promise.all(
-                Array.from(byType.entries()).map(async ([typeId, entries]) => {
-                    const dt = mapById[typeId]
-                    if (!dt) return { typeId, results: [] as any[] }
-                    const results = await extractFields(
-                        base64, mimetype, aiModel, false, typeId, dt,
-                        entries.map(e => ({ partId: e.partId })),
-                        usage,
-                        extractGeminiModel,
-                    )
-                    return { typeId, results }
+        const extractionResults = await Promise.all(
+            Array.from(byType.entries()).map(async ([typeId, entries]) => {
+                const dt = mapById[typeId]
+                if (!dt) return { typeId, results: [] as any[] }
+                const results = await extractFields(
+                    base64, mimetype, aiModel, false, typeId, dt,
+                    entries.map(e => ({ partId: e.partId })),
+                    usage,
+                    extractGeminiModel,
+                )
+                return { typeId, results }
+            })
+        )
+        const extractedByType = new Map<string, any[]>()
+        for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results)
+
+        allRawDocs = []
+        for (const [typeId, classEntries] of byType) {
+            if (!mapById[typeId]) continue
+            const ext = extractedByType.get(typeId) || []
+            for (let i = 0; i < classEntries.length; i++) {
+                const cls = classEntries[i]
+                const e = i < ext.length ? normalizeDoc(ext[i]) : null
+                allRawDocs.push({
+                    id: typeId,
+                    data: mergePassData(cls.data, e?.data as Record<string, unknown> | undefined),
+                    docdate: e?.docdate || cls.docdate || null,
+                    ...(cls.confidence !== undefined ? { confidence: cls.confidence } : {}),
+                    ...(cls.partId ? { partId: cls.partId } : {}),
                 })
-            )
-            const extractedByType = new Map<string, any[]>()
-            for (const { typeId, results } of extractionResults) extractedByType.set(typeId, results)
-
-            allRawDocs = []
-            for (const [typeId, classEntries] of byType) {
-                if (!mapById[typeId]) continue
-                const ext = extractedByType.get(typeId) || []
-                for (let i = 0; i < classEntries.length; i++) {
-                    const cls = classEntries[i]
-                    const e = i < ext.length ? normalizeDoc(ext[i]) : null
-                    allRawDocs.push({
-                        id: typeId,
-                        data: e?.data || {},
-                        docdate: e?.docdate || null,
-                        ...(cls.confidence !== undefined ? { confidence: cls.confidence } : {}),
-                        ...(cls.partId ? { partId: cls.partId } : {}),
-                    })
-                }
             }
-        } else {
-            allRawDocs = await classifyAndExtractImage(base64, mimetype, aiModel, doctypes, usage, extractGeminiModel)
         }
     } else {
         let classified: Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>
@@ -1104,11 +1173,11 @@ export async function Doc2Fields(
             }
         }
 
-        // Group by doc type for Pass 2 — keep confidence + Phase 2 inline
-        // `data`/`docdate` alongside each entry. The post-extraction merge
-        // falls back to inline values when `extractFields` returns empty so
-        // the schema-enforced classify payload isn't silently dropped on
-        // extract failures.
+        // Group by doc type for Pass 2 — keep confidence + Pass 1 inline
+        // `data`/`docdate` alongside each entry. Pass 2 is more focused on
+        // the slice, so it wins at the field level when it returns a present
+        // value. Pass 1 fills gaps (missing/null/empty values) so a focused
+        // extractor cannot hide schema-enforced classify fields it omitted.
         const byType = new Map<string, Array<{ start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>>()
         for (const c of classified) {
             const existing = byType.get(c.id) || []
@@ -1180,11 +1249,6 @@ export async function Doc2Fields(
                 extractedByType.get(n.id)!.push(n)
             }
 
-            // Phase 2 helper — non-empty data check. `{}` from extract should
-            // not shadow a classifier-inline payload that did populate fields.
-            const hasFields = (d: Record<string, unknown> | null | undefined): boolean =>
-                !!d && typeof d === 'object' && Object.keys(d).length > 0
-
             allRawDocs = []
             for (const [typeId, classEntries] of byType) {
                 if (!mapById[typeId]) continue
@@ -1225,13 +1289,11 @@ export async function Doc2Fields(
                         const cls = sortedClass[i]
                         const ext = i < sortedExtracted.length ? sortedExtracted[i] : null
 
-                        // Phase 2 fallback: if extractFields returned nothing
-                        // useful for this entry, reach back to the classifier
-                        // -inline payload (schema-enforced via Phase 2 data
-                        // schemas) so the upload doesn't lose its fields.
-                        const data = hasFields(ext?.data as Record<string, unknown> | undefined)
-                            ? (ext!.data as Record<string, unknown>)
-                            : (cls.data || {})
+                        // Pass 1/Pass 2 merge: Pass 2 wins per present field
+                        // because it saw the focused slice; Pass 1 fills gaps.
+                        // This keeps the current Pass 2 precedence while
+                        // avoiding wholesale loss when extract omits a field.
+                        const data = mergePassData(cls.data, ext?.data as Record<string, unknown> | undefined)
                         const docdate = ext?.docdate || cls.docdate || null
 
                         allRawDocs.push({

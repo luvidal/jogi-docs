@@ -20,8 +20,8 @@ declare const queryGrounded: (prompt: string, options?: {
  *
  * ## Extraction Strategy
  *
- * ### Images → Single-pass (classifyAndExtractImage)
- * One API call that classifies AND extracts fields simultaneously.
+ * ### Images → Split-pass (classifyDocument → extractFields)
+ * Same schema contract as PDFs; images just omit page ranges.
  *
  * ### PDFs → Multi-pass (detectDocumentBoundaries → classifyDocument → extractFields)
  * Pass 0 — Split: detect document boundaries in multi-doc PDFs (no doctype knowledge)
@@ -86,6 +86,11 @@ declare function buildDataSchemaForDoctype(docTypeId: string): ResponseSchema | 
  * authorization, and per-doctype sanity.
  */
 declare function buildClassifyResponseSchema(doctypeIds: string[], isPDF: boolean): ResponseSchema;
+declare function buildExtractResponseSchema(docTypeId: string, isPDF: boolean, entries: Array<{
+    start?: number;
+    end?: number;
+    partId?: string;
+}>): ResponseSchema | null;
 declare function Doc2Fields(buffer: Buffer, mimetype: string, model?: ModelArg, forcedDoctypeId?: string, options?: {
     skipFace?: boolean;
     geminiModels?: GeminiModels;
@@ -219,4 +224,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, buildExtractResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
