@@ -435,6 +435,7 @@ __export(ocr_exports, {
   buildClassifyResponseSchema: () => buildClassifyResponseSchema,
   buildDataSchemaForDoctype: () => buildDataSchemaForDoctype,
   buildExtractResponseSchema: () => buildExtractResponseSchema,
+  buildShapeOnlyClassifyResponseSchema: () => buildShapeOnlyClassifyResponseSchema,
   detectCedulaSide: () => detectCedulaSide,
   extractPdfPageAsImage: () => extractPdfPageAsImage,
   getPromptVersion: () => getPromptVersion,
@@ -865,6 +866,74 @@ function buildClassifyResponseSchema(doctypeIds, isPDF) {
     required: ["documents"]
   };
 }
+function buildShapeOnlyClassifyResponseSchema(doctypeIds, isPDF) {
+  const itemProps = {
+    id: { type: "STRING", enum: doctypeIds },
+    confidence: { type: "NUMBER", minimum: 0, maximum: 1 },
+    partId: { type: "STRING", enum: ["front", "back"], nullable: true }
+  };
+  const required = isPDF ? ["id", "confidence", "start", "end"] : ["id", "confidence"];
+  if (isPDF) {
+    itemProps.start = { type: "INTEGER", minimum: 1 };
+    itemProps.end = { type: "INTEGER", minimum: 1 };
+  }
+  return {
+    type: "OBJECT",
+    properties: {
+      documents: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: itemProps,
+          required
+        }
+      }
+    },
+    required: ["documents"]
+  };
+}
+function isGeminiInvalidArgumentError(err) {
+  const e = err;
+  const status = e?.status ?? e?.statusCode ?? e?.code;
+  const nestedStatus = e?.error?.status ?? e?.error?.code;
+  const statusLooks400 = status === 400 || status === "400" || nestedStatus === 400 || nestedStatus === "400";
+  const invalidStatus = status === "INVALID_ARGUMENT" || nestedStatus === "INVALID_ARGUMENT";
+  const message = [
+    e?.message,
+    e?.status,
+    e?.statusCode,
+    e?.code,
+    e?.error?.message,
+    e?.error?.status,
+    e?.error?.code
+  ].filter(Boolean).join(" ").toLowerCase();
+  const messageLooksInvalid = message.includes("invalid_argument") || message.includes("invalid argument");
+  return invalidStatus || statusLooks400 && messageLooksInvalid;
+}
+function normalizeClassifyDocs(rawDocs, options = {}) {
+  const allowed = options.allowedIds ? new Set(options.allowedIds) : null;
+  return rawDocs.map((d) => {
+    const id = d?.id || d?.doctypeid || d?.doc_type_id || null;
+    const start = Number.isFinite(d?.start) ? Number(d.start) : d?.start ? parseInt(d.start, 10) : void 0;
+    const end = Number.isFinite(d?.end) ? Number(d.end) : d?.end ? parseInt(d.end, 10) : void 0;
+    const partId = d?.partId || d?.part_id || d?.partid || void 0;
+    const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
+    const data = d?.data && typeof d.data === "object" && !Array.isArray(d.data) ? d.data : void 0;
+    const rawDate = d?.docdate || d?.document_date || d?.documentDate || null;
+    const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN((/* @__PURE__ */ new Date(`${rawDate}T12:00:00`)).getTime()) ? rawDate : null;
+    return {
+      id,
+      ...Number.isFinite(start) ? { start } : {},
+      ...Number.isFinite(end) ? { end } : {},
+      ...partId ? { partId } : {},
+      ...confidence !== void 0 ? { confidence } : {},
+      ...data ? { data } : {},
+      ...docdate ? { docdate } : {}
+    };
+  }).filter(
+    (d) => !!d.id && (!allowed || allowed.has(d.id)) && (!options.requireConfidence || typeof d.confidence === "number")
+  );
+}
 function buildExtractResponseSchema(docTypeId, isPDF, entries) {
   if (!DATA_SCHEMA_DOCTYPES.has(docTypeId)) return null;
   const dataSchema = buildDataSchemaForDoctype(docTypeId);
@@ -913,6 +982,8 @@ function getSchemaVersionPayload() {
   return {
     classifyImage: buildClassifyResponseSchema(doctypeIds, false),
     classifyPdf: buildClassifyResponseSchema(doctypeIds, true),
+    classifyImageShapeOnly: buildShapeOnlyClassifyResponseSchema(doctypeIds, false),
+    classifyPdfShapeOnly: buildShapeOnlyClassifyResponseSchema(doctypeIds, true),
     extractSchemas
   };
 }
@@ -968,29 +1039,21 @@ Si una p\xE1gina contiene AMBAS caras de una c\xE9dula (frente y reverso), devue
 ${inlineDataLine}
 Tipos v\xE1lidos:
 ${typeList}`;
-  const schema = buildClassifyResponseSchema(doctypes.map((d) => d.id), isPDF);
-  const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema);
+  const doctypeIds = doctypes.map((d) => d.id);
+  const schema = buildClassifyResponseSchema(doctypeIds, isPDF);
+  let vr;
+  let requireConfidence = false;
+  try {
+    vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema);
+  } catch (err) {
+    if (!isGeminiInvalidArgumentError(err)) throw err;
+    const shapeOnlySchema = buildShapeOnlyClassifyResponseSchema(doctypeIds, isPDF);
+    vr = await model2vision(model, mimetype, base64, prompt, geminiModel, shapeOnlySchema);
+    requireConfidence = true;
+  }
   if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage));
   const rawDocs = parseRawDocs(vr.text);
-  return rawDocs.map((d) => {
-    const id = d?.id || d?.doctypeid || null;
-    const start = Number.isFinite(d?.start) ? Number(d.start) : d?.start ? parseInt(d.start, 10) : void 0;
-    const end = Number.isFinite(d?.end) ? Number(d.end) : d?.end ? parseInt(d.end, 10) : void 0;
-    const partId = d?.partId || d?.part_id || d?.partid || void 0;
-    const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
-    const data = d?.data && typeof d.data === "object" && !Array.isArray(d.data) ? d.data : void 0;
-    const rawDate = d?.docdate || d?.document_date || d?.documentDate || null;
-    const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN((/* @__PURE__ */ new Date(`${rawDate}T12:00:00`)).getTime()) ? rawDate : null;
-    return {
-      id,
-      ...Number.isFinite(start) ? { start } : {},
-      ...Number.isFinite(end) ? { end } : {},
-      ...partId ? { partId } : {},
-      ...confidence !== void 0 ? { confidence } : {},
-      ...data ? { data } : {},
-      ...docdate ? { docdate } : {}
-    };
-  }).filter((d) => d.id);
+  return normalizeClassifyDocs(rawDocs, { requireConfidence, allowedIds: doctypeIds });
 }
 async function extractFields(base64, mimetype, model, isPDF, docTypeId, doctype, entries, usageAccum, geminiModel) {
   const fields = JSON.stringify(doctype.fieldDefs.map((f) => {
@@ -1413,7 +1476,7 @@ var init_ocr = __esm({
     init_ai();
     init_doctypes();
     init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v11";
+    PROMPT_TEMPLATE_VERSION = "v12";
     pdfToPngModule = null;
     getPdfToPng = async () => {
       if (!pdfToPngModule) {
@@ -1822,6 +1885,7 @@ exports.buildCacheKey = buildCacheKey;
 exports.buildClassifyResponseSchema = buildClassifyResponseSchema;
 exports.buildDataSchemaForDoctype = buildDataSchemaForDoctype;
 exports.buildExtractResponseSchema = buildExtractResponseSchema;
+exports.buildShapeOnlyClassifyResponseSchema = buildShapeOnlyClassifyResponseSchema;
 exports.configure = configure;
 exports.detectAndSplitCompositeCedula = detectAndSplitCompositeCedula;
 exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;

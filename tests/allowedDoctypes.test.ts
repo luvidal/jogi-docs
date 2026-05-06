@@ -70,6 +70,23 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         return items.properties?.id?.enum ?? []
     }
 
+    function classifyItem(schema: any): any {
+        return schema?.properties?.documents?.items
+    }
+
+    function isShapeOnlyClassifySchema(schema: any): boolean {
+        const item = classifyItem(schema)
+        return !!item &&
+            !Array.isArray(item.anyOf) &&
+            Array.isArray(item.required) &&
+            item.required.includes('id') &&
+            item.required.includes('confidence') &&
+            item.properties?.confidence?.minimum === 0 &&
+            item.properties?.confidence?.maximum === 1 &&
+            item.properties?.data === undefined &&
+            item.properties?.docdate === undefined
+    }
+
     it('narrowed candidate set restricts the schema enum to that subset', async () => {
         const pdf = await buildPdf()
         await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
@@ -85,6 +102,89 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         expect(collectIds(schemaArg).sort()).toEqual(
             ['cedula-identidad', 'liquidaciones-sueldo'].sort(),
         )
+    })
+
+    it('retries schema INVALID_ARGUMENT from classify with the same candidates and a shape-only schema', async () => {
+        const pdf = await buildPdf()
+        mock2vision
+            .mockRejectedValueOnce({ status: 400, error: { status: 'INVALID_ARGUMENT', message: 'Request contains an invalid argument.' } })
+            .mockResolvedValueOnce({
+                text: '{"documents":[{"id":"informe-deuda","start":1,"end":1,"confidence":0.93}]}',
+                usage: undefined,
+            })
+            .mockResolvedValueOnce({
+                text: '{"documents":[{"id":"informe-deuda","start":1,"end":1,"data":{},"docdate":null}]}',
+                usage: undefined,
+            })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            allowedDoctypeIds: ['informe-deuda', 'cotizaciones-afp'],
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        expect(result.documents[0]).toMatchObject({
+            doc_type_id: 'informe-deuda',
+            start: 1,
+            end: 1,
+            confidence: 0.93,
+        })
+        expect(mock2vision).toHaveBeenCalledTimes(3)
+        expect(collectIds(mock2vision.mock.calls[0][5]).sort()).toEqual(['cotizaciones-afp', 'informe-deuda'])
+        expect(collectIds(mock2vision.mock.calls[1][5]).sort()).toEqual(['cotizaciones-afp', 'informe-deuda'])
+        expect(isShapeOnlyClassifySchema(mock2vision.mock.calls[1][5])).toBe(true)
+    })
+
+    it('drops shape-only fallback docs with missing, malformed, out-of-range, or off-candidate confidence output', async () => {
+        const pdf = await buildPdf()
+        mock2vision
+            .mockRejectedValueOnce({ status: 400, error: { status: 'INVALID_ARGUMENT' }, message: 'INVALID_ARGUMENT' })
+            .mockResolvedValueOnce({
+                text: JSON.stringify({
+                    documents: [
+                        { id: 'informe-deuda', start: 1, end: 1 },
+                        { id: 'informe-deuda', start: 1, end: 1, confidence: '0.91' },
+                        { id: 'informe-deuda', start: 1, end: 1, confidence: 1.2 },
+                        { id: 'padron', start: 1, end: 1, confidence: 0.92 },
+                    ],
+                }),
+                usage: undefined,
+            })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            allowedDoctypeIds: ['informe-deuda'],
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        expect(result.documents).toEqual([])
+        expect(mock2vision).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps valid fallback docs after filtering malformed peers', async () => {
+        const pdf = await buildPdf()
+        mock2vision
+            .mockRejectedValueOnce({ code: '400', message: 'INVALID_ARGUMENT: Request contains an invalid argument.' })
+            .mockResolvedValueOnce({
+                text: JSON.stringify({
+                    documents: [
+                        { id: 'informe-deuda', start: 1, end: 1 },
+                        { id: 'informe-deuda', start: 1, end: 1, confidence: 0.91 },
+                    ],
+                }),
+                usage: undefined,
+            })
+            .mockResolvedValueOnce({
+                text: '{"documents":[{"id":"informe-deuda","start":1,"end":1,"data":{},"docdate":null}]}',
+                usage: undefined,
+            })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            allowedDoctypeIds: ['informe-deuda'],
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        expect(result.documents).toHaveLength(1)
+        expect(result.documents[0]).toMatchObject({ doc_type_id: 'informe-deuda', confidence: 0.91 })
+        expect(mock2vision).toHaveBeenCalledTimes(3)
     })
 
     it('omitted candidate set keeps the full catalog enum', async () => {

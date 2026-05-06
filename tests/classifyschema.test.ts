@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildClassifyResponseSchema } from '../src/ocr'
+import { buildClassifyResponseSchema, buildShapeOnlyClassifyResponseSchema } from '../src/ocr'
 
 /**
  * Phase 2 schema shape — per-doctype `data` schemas land as discriminated
@@ -103,5 +103,34 @@ describe('buildClassifyResponseSchema (Phase 2 shape)', () => {
         expect(branches[0].properties.id.enum).toEqual(narrowed)
         // Sole-branch path — covered doctype carries `data`.
         expect(branches[0].properties.data).toBeDefined()
+    })
+})
+
+describe('buildShapeOnlyClassifyResponseSchema', () => {
+    const ids = ['cedula-identidad', 'carpeta-tributaria']
+
+    it('keeps the Phase 1 PDF invariants without anyOf data branches', () => {
+        const schema = buildShapeOnlyClassifyResponseSchema(ids, true) as any
+        const item = schema.properties.documents.items
+
+        expect(item.anyOf).toBeUndefined()
+        expect(item.required).toEqual(['id', 'confidence', 'start', 'end'])
+        expect(item.properties.id.enum).toEqual(ids)
+        expect(item.properties.confidence).toMatchObject({ type: 'NUMBER', minimum: 0, maximum: 1 })
+        expect(item.properties.start).toMatchObject({ type: 'INTEGER', minimum: 1 })
+        expect(item.properties.end).toMatchObject({ type: 'INTEGER', minimum: 1 })
+        expect(item.properties.partId).toMatchObject({ type: 'STRING', enum: ['front', 'back'], nullable: true })
+        expect(item.properties.data).toBeUndefined()
+        expect(item.properties.docdate).toBeUndefined()
+    })
+
+    it('keeps image classify shape narrow and omits page ranges', () => {
+        const schema = buildShapeOnlyClassifyResponseSchema(ids, false) as any
+        const item = schema.properties.documents.items
+
+        expect(item.required).toEqual(['id', 'confidence'])
+        expect(item.properties.id.enum).toEqual(ids)
+        expect(item.properties.start).toBeUndefined()
+        expect(item.properties.end).toBeUndefined()
     })
 })

@@ -94,6 +94,8 @@ Use `npx tsc --noEmit` for type checking. Run `npm test` before committing.
 
 For covered high-stakes doctypes, both Pass 1 classification and Pass 2 extraction use Gemini `responseSchema`. Pass 2 remains the preferred source because it sees the focused slice, but `ocr.ts` merges at field level: Pass 2 present values win, and Pass 1 fills missing/null/empty gaps.
 
+Schema-enforced classify is the only call site with a Vertex `400 INVALID_ARGUMENT` recovery: retry once with a shape-only schema that preserves `id`, `confidence`, `partId`, and PDF page ranges while dropping per-doctype `data` branches. Fallback docs with missing, malformed, out-of-range, or off-candidate confidence/id are dropped before returning to callers. Do not add this fallback to generic `model2vision`, extract, cedula-side, or composite-region calls.
+
 ## Consumer Integration
 
 Consumed by Jogi via GitHub reference:

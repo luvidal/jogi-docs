@@ -86,6 +86,7 @@ declare function buildDataSchemaForDoctype(docTypeId: string): ResponseSchema | 
  * authorization, and per-doctype sanity.
  */
 declare function buildClassifyResponseSchema(doctypeIds: string[], isPDF: boolean): ResponseSchema;
+declare function buildShapeOnlyClassifyResponseSchema(doctypeIds: string[], isPDF: boolean): ResponseSchema;
 declare function buildExtractResponseSchema(docTypeId: string, isPDF: boolean, entries: Array<{
     start?: number;
     end?: number;
@@ -224,4 +225,4 @@ declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | nu
 /** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
 declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
 
-export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, buildExtractResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, buildExtractResponseSchema, buildShapeOnlyClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };

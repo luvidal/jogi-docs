@@ -73,7 +73,10 @@ function addUsage(total: AIUsage, add?: AIUsage): AIUsage {
 // and the Pass 1/Pass 2 merge is field-level: Pass 2 wins for present values,
 // Pass 1 fills missing/null/empty gaps. The cache key also hashes classifier
 // and extractor schema output so schema-only edits invalidate stale AI caches.
-const PROMPT_TEMPLATE_VERSION = 'v11'
+// v12: schema-enforced classify retries Vertex 400 INVALID_ARGUMENT once with
+// a shape-only schema that preserves id/confidence/part/page invariants but
+// removes Phase 2 per-doctype data branches.
+const PROMPT_TEMPLATE_VERSION = 'v12'
 
 /**
  * Returns a short hash that changes when doctypes schema or prompt templates change.
@@ -624,6 +627,93 @@ export function buildClassifyResponseSchema(
     }
 }
 
+export function buildShapeOnlyClassifyResponseSchema(
+    doctypeIds: string[],
+    isPDF: boolean,
+): ResponseSchema {
+    const itemProps: Record<string, ResponseSchema> = {
+        id: { type: 'STRING', enum: doctypeIds },
+        confidence: { type: 'NUMBER', minimum: 0, maximum: 1 },
+        partId: { type: 'STRING', enum: ['front', 'back'], nullable: true },
+    }
+    const required = isPDF ? ['id', 'confidence', 'start', 'end'] : ['id', 'confidence']
+    if (isPDF) {
+        itemProps.start = { type: 'INTEGER', minimum: 1 }
+        itemProps.end = { type: 'INTEGER', minimum: 1 }
+    }
+
+    return {
+        type: 'OBJECT',
+        properties: {
+            documents: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: itemProps,
+                    required,
+                },
+            },
+        },
+        required: ['documents'],
+    }
+}
+
+function isGeminiInvalidArgumentError(err: unknown): boolean {
+    const e = err as any
+    const status = e?.status ?? e?.statusCode ?? e?.code
+    const nestedStatus = e?.error?.status ?? e?.error?.code
+    const statusLooks400 = status === 400 || status === '400' || nestedStatus === 400 || nestedStatus === '400'
+    const invalidStatus = status === 'INVALID_ARGUMENT' || nestedStatus === 'INVALID_ARGUMENT'
+    const message = [
+        e?.message,
+        e?.status,
+        e?.statusCode,
+        e?.code,
+        e?.error?.message,
+        e?.error?.status,
+        e?.error?.code,
+    ].filter(Boolean).join(' ').toLowerCase()
+    const messageLooksInvalid = message.includes('invalid_argument') || message.includes('invalid argument')
+    return invalidStatus || (statusLooks400 && messageLooksInvalid)
+}
+
+type ClassifiedDoc = {
+    id: string
+    start?: number
+    end?: number
+    partId?: string
+    confidence?: number
+    data?: Record<string, unknown>
+    docdate?: string | null
+}
+
+function normalizeClassifyDocs(rawDocs: any[], options: { requireConfidence?: boolean; allowedIds?: string[] } = {}): ClassifiedDoc[] {
+    const allowed = options.allowedIds ? new Set(options.allowedIds) : null
+    return rawDocs.map((d: any) => {
+        const id = d?.id || d?.doctypeid || d?.doc_type_id || null
+        const start = Number.isFinite(d?.start) ? Number(d.start) : (d?.start ? parseInt(d.start, 10) : undefined)
+        const end = Number.isFinite(d?.end) ? Number(d.end) : (d?.end ? parseInt(d.end, 10) : undefined)
+        const partId = d?.partId || d?.part_id || d?.partid || undefined
+        const confidence = typeof d?.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : undefined
+        const data = d?.data && typeof d.data === 'object' && !Array.isArray(d.data) ? d.data as Record<string, unknown> : undefined
+        const rawDate = d?.docdate || d?.document_date || d?.documentDate || null
+        const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN(new Date(`${rawDate}T12:00:00`).getTime()) ? rawDate : null
+        return {
+            id,
+            ...(Number.isFinite(start) ? { start } : {}),
+            ...(Number.isFinite(end) ? { end } : {}),
+            ...(partId ? { partId } : {}),
+            ...(confidence !== undefined ? { confidence } : {}),
+            ...(data ? { data } : {}),
+            ...(docdate ? { docdate } : {}),
+        }
+    }).filter((d: any): d is ClassifiedDoc =>
+        !!d.id &&
+        (!allowed || allowed.has(d.id)) &&
+        (!options.requireConfidence || typeof d.confidence === 'number')
+    )
+}
+
 export function buildExtractResponseSchema(
     docTypeId: string,
     isPDF: boolean,
@@ -688,6 +778,8 @@ function getSchemaVersionPayload(): unknown {
     return {
         classifyImage: buildClassifyResponseSchema(doctypeIds, false),
         classifyPdf: buildClassifyResponseSchema(doctypeIds, true),
+        classifyImageShapeOnly: buildShapeOnlyClassifyResponseSchema(doctypeIds, false),
+        classifyPdfShapeOnly: buildShapeOnlyClassifyResponseSchema(doctypeIds, true),
         extractSchemas,
     }
 }
@@ -731,7 +823,7 @@ async function classifyDocument(
     doctypes: Array<{ id: string; label: string; definition: string; fieldDefs?: any[] }>,
     usageAccum?: AIUsage,
     geminiModel?: string,
-): Promise<Array<{ id: string; start?: number; end?: number; partId?: string; confidence?: number; data?: Record<string, unknown>; docdate?: string | null }>> {
+): Promise<ClassifiedDoc[]> {
     const typeList = doctypes.map(dt => {
         const base = `• ${dt.id}: ${dt.definition || dt.label}`
         if (!dt.fieldDefs?.length) return base
@@ -772,31 +864,23 @@ ${typeList}`
     // Schema-enforced output. The multi-page PDF route is the primary
     // beneficiary; single-image / single-PDF-page classify paths reuse the
     // same builder so the contract is consistent across routes.
-    const schema = buildClassifyResponseSchema(doctypes.map(d => d.id), isPDF)
+    const doctypeIds = doctypes.map(d => d.id)
+    const schema = buildClassifyResponseSchema(doctypeIds, isPDF)
 
-    const vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema)
+    let vr: VisionResult
+    let requireConfidence = false
+    try {
+        vr = await model2vision(model, mimetype, base64, prompt, geminiModel, schema)
+    } catch (err) {
+        if (!isGeminiInvalidArgumentError(err)) throw err
+        const shapeOnlySchema = buildShapeOnlyClassifyResponseSchema(doctypeIds, isPDF)
+        vr = await model2vision(model, mimetype, base64, prompt, geminiModel, shapeOnlySchema)
+        requireConfidence = true
+    }
     if (usageAccum) Object.assign(usageAccum, addUsage(usageAccum, vr.usage))
     const rawDocs = parseRawDocs(vr.text)
 
-    return rawDocs.map((d: any) => {
-        const id = d?.id || d?.doctypeid || null
-        const start = Number.isFinite(d?.start) ? Number(d.start) : (d?.start ? parseInt(d.start, 10) : undefined)
-        const end = Number.isFinite(d?.end) ? Number(d.end) : (d?.end ? parseInt(d.end, 10) : undefined)
-        const partId = d?.partId || d?.part_id || d?.partid || undefined
-        const confidence = typeof d?.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : undefined
-        const data = d?.data && typeof d.data === 'object' && !Array.isArray(d.data) ? d.data as Record<string, unknown> : undefined
-        const rawDate = d?.docdate || d?.document_date || d?.documentDate || null
-        const docdate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && !isNaN(new Date(`${rawDate}T12:00:00`).getTime()) ? rawDate : null
-        return {
-            id,
-            ...(Number.isFinite(start) ? { start } : {}),
-            ...(Number.isFinite(end) ? { end } : {}),
-            ...(partId ? { partId } : {}),
-            ...(confidence !== undefined ? { confidence } : {}),
-            ...(data ? { data } : {}),
-            ...(docdate ? { docdate } : {}),
-        }
-    }).filter((d: any) => d.id)
+    return normalizeClassifyDocs(rawDocs, { requireConfidence, allowedIds: doctypeIds })
 }
 
 // ─── Pass 2: Extract fields ──────────────────────────────────────────────────

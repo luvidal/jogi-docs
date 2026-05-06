@@ -122,6 +122,26 @@ describe('Doc2Fields extraction hardening', () => {
         })
     })
 
+    it('does not run the shape-only retry for extractor INVALID_ARGUMENT failures', async () => {
+        mock2vision
+            .mockResolvedValueOnce({
+                text: JSON.stringify({
+                    documents: [{
+                        id: 'resumen-boletas-sii',
+                        confidence: 0.98,
+                    }],
+                }),
+                usage: undefined,
+            })
+            .mockRejectedValueOnce({ status: 400, error: { status: 'INVALID_ARGUMENT' }, message: 'INVALID_ARGUMENT' })
+
+        await expect(Doc2Fields(Buffer.from('image'), 'image/png', 'gemini')).rejects.toMatchObject({ status: 400 })
+
+        expect(mock2vision).toHaveBeenCalledTimes(2)
+        expect(isClassifyPrompt(mock2vision.mock.calls[0][3])).toBe(true)
+        expect(isClassifyPrompt(mock2vision.mock.calls[1][3])).toBe(false)
+    })
+
     it('deep-merges Pass 1 and Pass 2 data for PDFs with Pass 2 field precedence', async () => {
         const pdf = await buildPdf()
         mock2vision.mockImplementation(async (_model, _mimetype, _base64, prompt) => {
