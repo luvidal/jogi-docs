@@ -220,9 +220,4 @@ declare function extractFace(imageBuffer: Buffer, _mimetype?: string, _model?: s
  */
 declare function mergeCedulaFiles(files: CedulaFile[], logAction?: string): MergedCedula;
 
-/** Resize an image buffer to a small JPEG thumbnail. Returns null on failure. */
-declare function generateThumbnailFromImage(buffer: Buffer): Promise<Buffer | null>;
-/** Render first page of a PDF to a small JPEG thumbnail. Returns null on failure. */
-declare function generateThumbnailFromPdf(buffer: Buffer): Promise<Buffer | null>;
-
-export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, buildExtractResponseSchema, buildShapeOnlyClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, generateThumbnailFromImage, generateThumbnailFromPdf, getPromptVersion, mergeCedulaFiles, queryGrounded };
+export { AllowedDoctypeIds, CedulaFile, CompositeCedulaResult, Doc2Fields, ExtractionResult, type FaceExtractionResult, GroundedResult, MergedCedula, ModelArg, buildCacheKey, buildClassifyResponseSchema, buildDataSchemaForDoctype, buildExtractResponseSchema, buildShapeOnlyClassifyResponseSchema, detectAndSplitCompositeCedula, detectAndSplitCompositeCedulaV3, detectCedulaSide, extractFace, extractPdfPageAsImage, getPromptVersion, mergeCedulaFiles, queryGrounded };

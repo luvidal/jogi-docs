@@ -1,25 +1,16 @@
 'use strict';
 
+var pdfLib = require('pdf-lib');
 var sharp2 = require('sharp');
 var clientRekognition = require('@aws-sdk/client-rekognition');
-var pdfLib = require('pdf-lib');
 var crypto = require('crypto');
 
 function _interopDefault (e) { return e && e.__esModule ? e : { default: e }; }
 
 var sharp2__default = /*#__PURE__*/_interopDefault(sharp2);
 
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-
 // src/config.ts
+var GLOBAL_KEY = "__avd_docprocessor__";
 function getGlobal() {
   const g = globalThis;
   if (!g[GLOBAL_KEY]) {
@@ -57,173 +48,171 @@ function getRawDoctypes() {
   }
   return raw;
 }
-var GLOBAL_KEY;
-var init_config = __esm({
-  "src/config.ts"() {
-    GLOBAL_KEY = "__avd_docprocessor__";
-  }
-});
 
 // src/ai.ts
-var hasGeminiAuth, toAiModel, anthropicClient, openaiClient, geminiClient, getAnthropic, getOpenAI, getGemini, strict, stripFences, geminiText, isRateLimitError, delay, getGeminiCaller; exports.queryGrounded = void 0; var callAnthropic, model2vision;
-var init_ai = __esm({
-  "src/ai.ts"() {
-    init_config();
-    hasGeminiAuth = () => !!getGeminiCall() || !!process.env.GEMINI_API_KEY;
-    toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
-    anthropicClient = null;
-    openaiClient = null;
-    geminiClient = null;
-    getAnthropic = async () => {
-      if (!anthropicClient) {
-        const { default: Anthropic } = await import('@anthropic-ai/sdk');
-        anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
-      }
-      return anthropicClient;
+var hasGeminiAuth = () => !!getGeminiCall() || !!process.env.GEMINI_API_KEY;
+var toAiModel = (m) => m === "gpt5" ? "GPT" : m === "gemini" ? "GEMINI" : "ANTHROPIC";
+var anthropicClient = null;
+var openaiClient = null;
+var geminiClient = null;
+var getAnthropic = async () => {
+  if (!anthropicClient) {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
+  }
+  return anthropicClient;
+};
+var getOpenAI = async () => {
+  if (!openaiClient) {
+    const { default: OpenAI } = await import('openai');
+    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+  }
+  return openaiClient;
+};
+var getGemini = async () => {
+  if (!geminiClient) {
+    const { GoogleGenAI } = await import('@google/genai');
+    geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+  }
+  return geminiClient;
+};
+var strict = "Devuelve EXCLUSIVAMENTE JSON v\xE1lido, sin markdown, sin texto adicional";
+var stripFences = (txt) => txt.replace(/```json|```/g, "").trim();
+var geminiText = (r) => r?.text || r?.candidates?.[0]?.content?.parts?.map?.((p) => p?.text || "").join?.("") || "";
+var isRateLimitError = (err) => {
+  if (!err) return false;
+  const msg = err.message?.toLowerCase?.() || "";
+  const status = err.status || err.statusCode || err.code;
+  return status === 429 || status === "429" || status === 503 || status === "503" || msg.includes("429") || msg.includes("503") || msg.includes("rate") || msg.includes("resource_exhausted") || msg.includes("quota") || msg.includes("unavailable");
+};
+var delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var getGeminiCaller = async () => {
+  const hosted = getGeminiCall();
+  if (hosted) return hosted;
+  const gemini = await getGemini();
+  return (params) => gemini.models.generateContent(params);
+};
+var queryGrounded = async (prompt, options) => {
+  if (!hasGeminiAuth()) return { text: "" };
+  const callGemini = await getGeminiCaller();
+  try {
+    const r = await callGemini({
+      // gemini-2.5-flash (not flash-lite): derived queries search the
+      // web and reason over multiple sources, which benefits from the
+      // 2.5-flash thinking mode. Flash-Lite doesn't think and tends to
+      // return the first plausible number — worse for market-price type
+      // lookups. Cost is trivial either way (<1 ¢ per query) and this
+      // path is used sparingly.
+      model: options?.model ?? "gemini-2.5-flash",
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] }
+    });
+    const um = r?.usageMetadata;
+    return {
+      text: geminiText(r),
+      usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : void 0
     };
-    getOpenAI = async () => {
-      if (!openaiClient) {
-        const { default: OpenAI } = await import('openai');
-        openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
-      }
-      return openaiClient;
+  } catch (err) {
+    if (isRateLimitError(err)) return { text: "" };
+    throw err;
+  }
+};
+var callAnthropic = async (mimetype, base64, content) => {
+  const anthropic = await getAnthropic();
+  const visionContent = [
+    { type: "text", text: content },
+    mimetype === "application/pdf" ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } : { type: "image", source: { type: "base64", media_type: mimetype, data: base64 } }
+  ];
+  const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
+  const block = r.content?.find((b) => b.type === "text");
+  const txt = block?.text?.trim() || "";
+  const u = r.usage;
+  return {
+    text: stripFences(txt),
+    usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
+  };
+};
+var model2vision = async (model, mimetype, base64, prompt, geminiModel, responseSchema) => {
+  const content = `${strict}
+${prompt}`;
+  if (model === "GPT" && process.env.OPENAI_API_KEY) {
+    if (mimetype === "application/pdf") throw new Error("GPT no soporta PDF");
+    const openai = await getOpenAI();
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o",
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: content }, { type: "image_url", image_url: { url: `data:${mimetype};base64,${base64}` } }]
+        }
+      ]
+    });
+    const txt = r.choices?.[0]?.message?.content?.trim() || "";
+    const u = r.usage;
+    return {
+      text: stripFences(txt),
+      usage: u ? { promptTokenCount: u.prompt_tokens, candidatesTokenCount: u.completion_tokens } : void 0
     };
-    getGemini = async () => {
-      if (!geminiClient) {
-        const { GoogleGenAI } = await import('@google/genai');
-        geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-      }
-      return geminiClient;
-    };
-    strict = "Devuelve EXCLUSIVAMENTE JSON v\xE1lido, sin markdown, sin texto adicional";
-    stripFences = (txt) => txt.replace(/```json|```/g, "").trim();
-    geminiText = (r) => r?.text || r?.candidates?.[0]?.content?.parts?.map?.((p) => p?.text || "").join?.("") || "";
-    isRateLimitError = (err) => {
-      if (!err) return false;
-      const msg = err.message?.toLowerCase?.() || "";
-      const status = err.status || err.statusCode || err.code;
-      return status === 429 || status === "429" || status === 503 || status === "503" || msg.includes("429") || msg.includes("503") || msg.includes("rate") || msg.includes("resource_exhausted") || msg.includes("quota") || msg.includes("unavailable");
-    };
-    delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    getGeminiCaller = async () => {
-      const hosted = getGeminiCall();
-      if (hosted) return hosted;
-      const gemini = await getGemini();
-      return (params) => gemini.models.generateContent(params);
-    };
-    exports.queryGrounded = async (prompt, options) => {
-      if (!hasGeminiAuth()) return { text: "" };
-      const callGemini = await getGeminiCaller();
+  }
+  if (model === "ANTHROPIC" && process.env.ANTHROPIC_API_KEY) {
+    return callAnthropic(mimetype, base64, content);
+  }
+  if (model === "GEMINI" && hasGeminiAuth()) {
+    const callGemini = await getGeminiCaller();
+    const maxRetries = 2;
+    let lastError = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const r = await callGemini({
-          // gemini-2.5-flash (not flash-lite): derived queries search the
-          // web and reason over multiple sources, which benefits from the
-          // 2.5-flash thinking mode. Flash-Lite doesn't think and tends to
-          // return the first plausible number — worse for market-price type
-          // lookups. Cost is trivial either way (<1 ¢ per query) and this
-          // path is used sparingly.
-          model: options?.model ?? "gemini-2.5-flash",
-          contents: prompt,
-          config: { tools: [{ googleSearch: {} }] }
+          model: geminiModel ?? "gemini-2.5-flash-lite",
+          // Vertex AI requires role-tagged messages; AI Studio was
+          // lenient with bare { parts: [...] }. Always wrap.
+          contents: [{
+            role: "user",
+            parts: [
+              { text: content },
+              { inlineData: { mimeType: mimetype, data: base64 } }
+            ]
+          }],
+          config: {
+            temperature: 0,
+            maxOutputTokens: 8192,
+            responseMimeType: "application/json",
+            ...responseSchema ? { responseSchema } : {}
+          }
         });
         const um = r?.usageMetadata;
         return {
-          text: geminiText(r),
+          text: stripFences(geminiText(r)),
           usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : void 0
         };
       } catch (err) {
-        if (isRateLimitError(err)) return { text: "" };
-        throw err;
-      }
-    };
-    callAnthropic = async (mimetype, base64, content) => {
-      const anthropic = await getAnthropic();
-      const visionContent = [
-        { type: "text", text: content },
-        mimetype === "application/pdf" ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } } : { type: "image", source: { type: "base64", media_type: mimetype, data: base64 } }
-      ];
-      const r = await anthropic.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, temperature: 0, messages: [{ role: "user", content: visionContent }] });
-      const block = r.content?.find((b) => b.type === "text");
-      const txt = block?.text?.trim() || "";
-      const u = r.usage;
-      return {
-        text: stripFences(txt),
-        usage: u ? { promptTokenCount: u.input_tokens, candidatesTokenCount: u.output_tokens } : void 0
-      };
-    };
-    model2vision = async (model, mimetype, base64, prompt, geminiModel, responseSchema) => {
-      const content = `${strict}
-${prompt}`;
-      if (model === "GPT" && process.env.OPENAI_API_KEY) {
-        if (mimetype === "application/pdf") throw new Error("GPT no soporta PDF");
-        const openai = await getOpenAI();
-        const r = await openai.chat.completions.create({
-          model: "gpt-4o",
-          temperature: 0,
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: content }, { type: "image_url", image_url: { url: `data:${mimetype};base64,${base64}` } }]
-            }
-          ]
-        });
-        const txt = r.choices?.[0]?.message?.content?.trim() || "";
-        const u = r.usage;
-        return {
-          text: stripFences(txt),
-          usage: u ? { promptTokenCount: u.prompt_tokens, candidatesTokenCount: u.completion_tokens } : void 0
-        };
-      }
-      if (model === "ANTHROPIC" && process.env.ANTHROPIC_API_KEY) {
-        return callAnthropic(mimetype, base64, content);
-      }
-      if (model === "GEMINI" && hasGeminiAuth()) {
-        const callGemini = await getGeminiCaller();
-        const maxRetries = 2;
-        let lastError = null;
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            const r = await callGemini({
-              model: geminiModel ?? "gemini-2.5-flash-lite",
-              // Vertex AI requires role-tagged messages; AI Studio was
-              // lenient with bare { parts: [...] }. Always wrap.
-              contents: [{
-                role: "user",
-                parts: [
-                  { text: content },
-                  { inlineData: { mimeType: mimetype, data: base64 } }
-                ]
-              }],
-              config: {
-                temperature: 0,
-                maxOutputTokens: 8192,
-                responseMimeType: "application/json",
-                ...responseSchema ? { responseSchema } : {}
-              }
-            });
-            const um = r?.usageMetadata;
-            return {
-              text: stripFences(geminiText(r)),
-              usage: um ? { promptTokenCount: um.promptTokenCount, candidatesTokenCount: um.candidatesTokenCount } : void 0
-            };
-          } catch (err) {
-            lastError = err;
-            if (isRateLimitError(err)) throw err;
-            if (attempt < maxRetries) {
-              await delay(1e3 * (attempt + 1));
-              continue;
-            }
-            break;
-          }
+        lastError = err;
+        if (isRateLimitError(err)) throw err;
+        if (attempt < maxRetries) {
+          await delay(1e3 * (attempt + 1));
+          continue;
         }
-        if (lastError) throw lastError;
+        break;
       }
-      return { text: "" };
-    };
+    }
+    if (lastError) throw lastError;
   }
-});
+  return { text: "" };
+};
 
 // src/doctypes.ts
+var TYPE_DEFAULTS = {
+  string: "",
+  date: "YYYY-MM-DD",
+  month: "YYYY-MM",
+  time: "HH:MM",
+  num: 0,
+  bool: false,
+  list: [],
+  obj: {}
+};
 function expandFields(fieldDefs) {
   const result = {};
   const internalFields = /* @__PURE__ */ new Set();
@@ -305,22 +294,7 @@ function getDoctypes() {
     ...doctype
   })).sort((a, b) => a.label.localeCompare(b.label));
 }
-var TYPE_DEFAULTS;
-var init_doctypes = __esm({
-  "src/doctypes.ts"() {
-    init_config();
-    TYPE_DEFAULTS = {
-      string: "",
-      date: "YYYY-MM-DD",
-      month: "YYYY-MM",
-      time: "HH:MM",
-      num: 0,
-      bool: false,
-      list: [],
-      obj: {}
-    };
-  }
-});
+var _client = null;
 function getClient(opts) {
   if (_client) return _client;
   _client = new clientRekognition.RekognitionClient({
@@ -419,29 +393,6 @@ async function extractFace(imageBuffer, _mimetype, _model, opts) {
     facesDetected: faces.length
   };
 }
-var _client;
-var init_faceextract = __esm({
-  "src/faceextract.ts"() {
-    init_config();
-    _client = null;
-  }
-});
-
-// src/ocr.ts
-var ocr_exports = {};
-__export(ocr_exports, {
-  Doc2Fields: () => Doc2Fields,
-  buildCacheKey: () => buildCacheKey,
-  buildClassifyResponseSchema: () => buildClassifyResponseSchema,
-  buildDataSchemaForDoctype: () => buildDataSchemaForDoctype,
-  buildExtractResponseSchema: () => buildExtractResponseSchema,
-  buildShapeOnlyClassifyResponseSchema: () => buildShapeOnlyClassifyResponseSchema,
-  detectCedulaSide: () => detectCedulaSide,
-  extractPdfPageAsImage: () => extractPdfPageAsImage,
-  getPromptVersion: () => getPromptVersion,
-  normalizeDoc: () => normalizeDoc,
-  parseRawDocs: () => parseRawDocs
-});
 function addUsage(total, add) {
   if (!add) return total;
   return {
@@ -449,12 +400,20 @@ function addUsage(total, add) {
     candidatesTokenCount: (total.candidatesTokenCount ?? 0) + (add.candidatesTokenCount ?? 0)
   };
 }
+var PROMPT_TEMPLATE_VERSION = "v12";
 function getPromptVersion() {
   return crypto.createHash("sha256").update(JSON.stringify(getDoctypes())).update(PROMPT_TEMPLATE_VERSION).update(JSON.stringify(getSchemaVersionPayload())).digest("hex").slice(0, 12);
 }
 function buildCacheKey(fileHash, model, promptVersion) {
   return crypto.createHash("sha256").update(fileHash + model + promptVersion).digest("hex").slice(0, 32);
 }
+var pdfToPngModule = null;
+var getPdfToPng = async () => {
+  if (!pdfToPngModule) {
+    pdfToPngModule = await import('pdf-to-png-converter');
+  }
+  return pdfToPngModule.pdfToPng;
+};
 async function extractPdfPageAsImage(pdfBuffer, pageNumber) {
   try {
     const arrayBuffer = pdfBuffer.buffer.slice(
@@ -632,6 +591,16 @@ function normalizeDoc(d) {
   const confidence = typeof d?.confidence === "number" && d.confidence >= 0 && d.confidence <= 1 ? d.confidence : void 0;
   return { id, data, docdate, start, end, partId, confidence };
 }
+var DATA_SCHEMA_DOCTYPES = /* @__PURE__ */ new Set([
+  "cedula-identidad",
+  "liquidaciones-sueldo",
+  "informe-deuda",
+  "padron",
+  "declaracion-anual-impuestos",
+  "resumen-boletas-sii"
+]);
+var STR = { type: "STRING", nullable: true };
+var NUM = { type: "NUMBER", nullable: true };
 function buildDataSchemaForDoctype(docTypeId) {
   switch (docTypeId) {
     case "cedula-identidad":
@@ -1470,40 +1439,6 @@ async function Doc2Fields(buffer, mimetype, model = "gemini", forcedDoctypeId, o
   const hasUsage = usage.promptTokenCount || usage.candidatesTokenCount;
   return { documents, ...hasUsage ? { usage } : {} };
 }
-var PROMPT_TEMPLATE_VERSION, pdfToPngModule, getPdfToPng, DATA_SCHEMA_DOCTYPES, STR, NUM;
-var init_ocr = __esm({
-  "src/ocr.ts"() {
-    init_ai();
-    init_doctypes();
-    init_faceextract();
-    PROMPT_TEMPLATE_VERSION = "v12";
-    pdfToPngModule = null;
-    getPdfToPng = async () => {
-      if (!pdfToPngModule) {
-        pdfToPngModule = await import('pdf-to-png-converter');
-      }
-      return pdfToPngModule.pdfToPng;
-    };
-    DATA_SCHEMA_DOCTYPES = /* @__PURE__ */ new Set([
-      "cedula-identidad",
-      "liquidaciones-sueldo",
-      "informe-deuda",
-      "padron",
-      "declaracion-anual-impuestos",
-      "resumen-boletas-sii"
-    ]);
-    STR = { type: "STRING", nullable: true };
-    NUM = { type: "NUMBER", nullable: true };
-  }
-});
-
-// src/index.ts
-init_config();
-init_ocr();
-init_ai();
-
-// src/cedula.ts
-init_ocr();
 var ASPECT_RATIO_THRESHOLD = 1.2;
 function findBestSplit(data, info, isGapRow, isContentRow) {
   const MIN_GAP_ROWS = Math.max(10, Math.round(info.height * 0.02));
@@ -1684,12 +1619,6 @@ async function detectAndSplitCompositeCedula(imageBuffer, mimetype, model = "gem
     ]
   };
 }
-
-// src/cedulasplit.ts
-init_ai();
-init_ocr();
-init_faceextract();
-init_config();
 var BBOX_PROMPT = `You are looking at a photograph or scan of a Chilean ID card (c\xE9dula de identidad). The image likely contains BOTH sides of the card \u2014 front and back \u2014 in a single image.
 
 How to identify each side:
@@ -1795,11 +1724,7 @@ async function detectAndSplitCompositeCedulaV3(imageBuffer, mimetype, model = "g
   };
 }
 
-// src/index.ts
-init_faceextract();
-
 // src/utils.ts
-init_config();
 function safeJsonParse(json, context) {
   if (!json) return null;
   try {
@@ -1815,7 +1740,6 @@ function safeJsonParse(json, context) {
 }
 
 // src/multipart.ts
-init_doctypes();
 function getPartIdFromFilename(filename) {
   const match = filename.match(/[_ ](front|back)\.\w+$/);
   if (match) return match[1];
@@ -1860,25 +1784,6 @@ function mergeCedulaFiles(files, logAction = "parse_cedula") {
     foto_base64: merged.foto_base64 || null
   };
 }
-var THUMB_WIDTH = 200;
-var THUMB_QUALITY = 65;
-async function generateThumbnailFromImage(buffer) {
-  try {
-    return await sharp2__default.default(buffer).resize(THUMB_WIDTH, null, { withoutEnlargement: true }).jpeg({ quality: THUMB_QUALITY, mozjpeg: true }).toBuffer();
-  } catch {
-    return null;
-  }
-}
-async function generateThumbnailFromPdf(buffer) {
-  try {
-    const { extractPdfPageAsImage: extractPdfPageAsImage2 } = await Promise.resolve().then(() => (init_ocr(), ocr_exports));
-    const pageImage = await extractPdfPageAsImage2(buffer, 1);
-    if (!pageImage) return null;
-    return await generateThumbnailFromImage(pageImage);
-  } catch {
-    return null;
-  }
-}
 
 exports.Doc2Fields = Doc2Fields;
 exports.buildCacheKey = buildCacheKey;
@@ -1892,9 +1797,8 @@ exports.detectAndSplitCompositeCedulaV3 = detectAndSplitCompositeCedulaV3;
 exports.detectCedulaSide = detectCedulaSide;
 exports.extractFace = extractFace;
 exports.extractPdfPageAsImage = extractPdfPageAsImage;
-exports.generateThumbnailFromImage = generateThumbnailFromImage;
-exports.generateThumbnailFromPdf = generateThumbnailFromPdf;
 exports.getPromptVersion = getPromptVersion;
 exports.mergeCedulaFiles = mergeCedulaFiles;
+exports.queryGrounded = queryGrounded;
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

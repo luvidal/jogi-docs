@@ -48,7 +48,6 @@ The `skipFace` option prevents Doc2Fields from running its own face extraction, 
 | `src/cedulasplit.ts` | V3 composite cedula detection (front+back → split) | Gemini + Rekognition |
 | `src/cedula.ts` | V1 composite detection (superseded by V3) | Gemini |
 | `src/cedulamerge.ts` | Merge front/back cedula data into single record | — |
-| `src/thumbnail.ts` | Image/PDF thumbnail generation | — |
 | `src/doctypes.ts` | Doctype taxonomy loader | — |
 | `src/multipart.ts` | Multi-part document utilities | — |
 | `src/config.ts` | Pluggable logger, configure() | — |
@@ -59,7 +58,7 @@ The `skipFace` option prevents Doc2Fields from running its own face extraction, 
 
 | Import | Use case | Heavy deps? |
 |--------|----------|-------------|
-| `@jogi/docprocessor` | Server-only: AI extraction, cedula, thumbnails | Yes (sharp, AI SDKs, pdf-lib) |
+| `@jogi/docprocessor` | Server-only: AI extraction, cedula | Yes (sharp, AI SDKs, pdf-lib) |
 | `@jogi/docprocessor/doctypes` | Universal: doctype queries, types | No |
 | `@jogi/docprocessor/multipart` | Universal: multi-part file utilities | No |
 
@@ -80,10 +79,6 @@ mergeCedulaFiles(files)
 
 // PDF utilities
 extractPdfPageAsImage(pdfBuffer, pageNumber)
-
-// Thumbnails
-generateThumbnailFromImage(buffer, mimetype)
-generateThumbnailFromPdf(buffer)
 
 // Config
 configure({ logger })

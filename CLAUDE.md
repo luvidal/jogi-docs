@@ -38,7 +38,6 @@ src/
 ├── faceextract.ts        # Face extraction (V4, AWS Rekognition)
 ├── cedula.ts             # Composite cedula detection/splitting
 ├── cedulamerge.ts        # Front/back field merging
-├── thumbnail.ts          # Pure thumbnail generation
 ├── doctypes.ts           # Doctype utilities
 ├── doctypes.json         # Document type definitions
 ├── multipart.ts          # Multi-part document utilities

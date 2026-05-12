@@ -21,9 +21,6 @@ export type { FaceExtractionResult } from './faceextract'
 // Cedula merge
 export { mergeCedulaFiles } from './cedulamerge'
 
-// Thumbnail generation (pure, no S3)
-export { generateThumbnailFromImage, generateThumbnailFromPdf } from './thumbnail'
-
 // Types
 export type {
   ModelArg,
