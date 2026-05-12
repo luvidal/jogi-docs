@@ -134,6 +134,37 @@ describe('Doc2Fields — Phase 7a candidate-doctype narrowing', () => {
         expect(isShapeOnlyClassifySchema(mock2vision.mock.calls[1][5])).toBe(true)
     })
 
+    it('retries when @google/genai throws ClientError with status only in err.message', async () => {
+        // Real production shape from @google/genai: ClientError with NO .status /
+        // .code / .statusCode / .error keys — every signal lives inside .message
+        // ("got status: 400 Bad Request. {\"error\":{...,\"status\":\"INVALID_ARGUMENT\"}}").
+        // Without message-aware detection, the shape-only retry never fires and
+        // V3 cedula splits fail end-to-end on the hardening fixtures.
+        const pdf = await buildPdf()
+        const clientErrorLike = Object.assign(new Error(
+            'got status: 400 Bad Request. {"error":{"code":400,"message":"The specified schema produces a constraint that has too many states for serving","status":"INVALID_ARGUMENT"}}',
+        ), { name: 'ClientError' })
+        mock2vision
+            .mockRejectedValueOnce(clientErrorLike)
+            .mockResolvedValueOnce({
+                text: '{"documents":[{"id":"informe-deuda","start":1,"end":1,"confidence":0.93}]}',
+                usage: undefined,
+            })
+            .mockResolvedValueOnce({
+                text: '{"documents":[{"id":"informe-deuda","start":1,"end":1,"data":{},"docdate":null}]}',
+                usage: undefined,
+            })
+
+        const result = await Doc2Fields(pdf, 'application/pdf', 'gemini', undefined, {
+            allowedDoctypeIds: ['informe-deuda', 'cotizaciones-afp'],
+            geminiModels: { classify: 'gemini-2.5-flash', extract: 'gemini-2.5-flash-lite' },
+        })
+
+        expect(result.documents[0]).toMatchObject({ doc_type_id: 'informe-deuda', confidence: 0.93 })
+        expect(mock2vision).toHaveBeenCalledTimes(3)
+        expect(isShapeOnlyClassifySchema(mock2vision.mock.calls[1][5])).toBe(true)
+    })
+
     it('drops shape-only fallback docs with missing, malformed, out-of-range, or off-candidate confidence output', async () => {
         const pdf = await buildPdf()
         mock2vision

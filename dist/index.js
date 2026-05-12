@@ -877,7 +877,8 @@ function isGeminiInvalidArgumentError(err) {
     e?.error?.code
   ].filter(Boolean).join(" ").toLowerCase();
   const messageLooksInvalid = message.includes("invalid_argument") || message.includes("invalid argument");
-  return invalidStatus || statusLooks400 && messageLooksInvalid;
+  const messageLooks400 = /\b400\b/.test(message) || message.includes("bad request");
+  return invalidStatus || statusLooks400 && messageLooksInvalid || messageLooks400 && messageLooksInvalid;
 }
 function normalizeClassifyDocs(rawDocs, options = {}) {
   const allowed = options.allowedIds ? new Set(options.allowedIds) : null;
@@ -1641,7 +1642,7 @@ If you can only see ONE side of the card, return:
 Return ONLY valid JSON.`;
 async function findCardRegionsWithAI(imageBuffer, mimetype, model) {
   const base64 = imageBuffer.toString("base64");
-  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT);
+  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT, "gemini-2.5-flash");
   if (!vr.text) return null;
   const jsonMatch = vr.text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;

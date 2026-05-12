@@ -674,7 +674,12 @@ function isGeminiInvalidArgumentError(err: unknown): boolean {
         e?.error?.code,
     ].filter(Boolean).join(' ').toLowerCase()
     const messageLooksInvalid = message.includes('invalid_argument') || message.includes('invalid argument')
-    return invalidStatus || (statusLooks400 && messageLooksInvalid)
+    // @google/genai ClientError exposes nothing on the err object — status/code
+    // live only inside err.message ("got status: 400 Bad Request. {...}"), so
+    // the structured checks above all return false. Recognize the same signal
+    // from the message itself so the shape-only retry path actually fires.
+    const messageLooks400 = /\b400\b/.test(message) || message.includes('bad request')
+    return invalidStatus || (statusLooks400 && messageLooksInvalid) || (messageLooks400 && messageLooksInvalid)
 }
 
 type ClassifiedDoc = {

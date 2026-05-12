@@ -74,7 +74,13 @@ async function findCardRegionsWithAI(
   model: AiModel,
 ): Promise<CardRegions | null> {
   const base64 = imageBuffer.toString('base64')
-  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT)
+  // Pin Gemini to flash (not flash-lite) for bbox detection. Flash-lite under-
+  // localizes the front card on low-contrast / rotated / inverted-order scans
+  // and the loose bbox propagates through trim() into a face-extract miss.
+  // Flash returns tight, well-ordered bboxes across the hardening fixture set;
+  // pro is no better and ~10x slower. The model arg only matters when `model`
+  // is GEMINI — other paths ignore the geminiModel hint.
+  const vr = await model2vision(model, mimetype, base64, BBOX_PROMPT, 'gemini-2.5-flash')
   if (!vr.text) return null
 
   const jsonMatch = vr.text.match(/\{[\s\S]*\}/)
